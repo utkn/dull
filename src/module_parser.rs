@@ -5,7 +5,7 @@ use itertools::Itertools;
 use walkdir::WalkDir;
 
 use crate::{
-    config::{GlobalConfig, ModuleConfig},
+    config_parser::{GlobalConfig, ModuleConfig},
     virtual_system::ResolvedLink,
 };
 
@@ -119,7 +119,7 @@ impl<'a> ModuleParser<'a> {
     }
 
     pub fn parse(self) -> anyhow::Result<Module> {
-        println!("parsing module {:?}", self.source_path);
+        println!("* parsing module {:?}", self.source_path);
         if !self.source_path.is_dir() {
             bail!("module path {:?} is not a directory", self.source_path);
         }
@@ -157,7 +157,7 @@ impl<'a> ModuleParser<'a> {
                 .into_iter()
                 .map(|p| TraversalDirective::LinkThese(p)),
         );
-        println!("found directives {:?}", directives);
+        println!("collected directives {:?}", directives);
         let mut collected_paths = vec![];
         let mut frontier = vec![self.source_path.clone()];
         while frontier.len() > 0 {
@@ -189,7 +189,6 @@ impl<'a> ModuleParser<'a> {
                 }
             }
         }
-        println!("{:?}", collected_paths);
         Ok(Module {
             module_path: self.source_path.clone(),
             sources: collected_paths,

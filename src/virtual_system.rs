@@ -40,7 +40,7 @@ pub struct VirtualSystem {
 impl VirtualSystem {
     pub fn build<P: Into<PathBuf>>(root: P, links: Vec<ResolvedLink>) -> anyhow::Result<Self> {
         let root: PathBuf = root.into();
-        println!("creating a virtual system under {:?}", root);
+        println!("* creating a virtual system under {:?}", root);
         for link in links.into_iter() {
             let mut curr_virt_target = root.clone();
             let relativized_target = if link.abs_target.is_absolute() {
@@ -51,7 +51,6 @@ impl VirtualSystem {
             curr_virt_target.push(relativized_target);
             curr_virt_target = ResolvedLink::expand_path(curr_virt_target)?;
             // Create the virtual directory if it does not exist.
-            println!("creating {:?}", curr_virt_target);
             curr_virt_target
                 .parent()
                 .context(format!(
@@ -72,7 +71,7 @@ impl VirtualSystem {
     }
 
     pub fn deploy(self, clear_target: bool) -> anyhow::Result<()> {
-        println!("deploying system {:?}", self.path);
+        println!("* deploying the virtual system under {:?}", self.path);
         let leafs = WalkDir::new(self.path.clone())
             .follow_links(false)
             .into_iter()
@@ -101,6 +100,7 @@ impl VirtualSystem {
                 abs_target, abs_source,
             ))?;
         }
+        println!("* done =)");
         Ok(())
     }
 }

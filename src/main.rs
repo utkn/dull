@@ -1,19 +1,18 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use config::read_config;
+use config_parser::read_config;
 use itertools::Itertools;
 use rand::Rng;
 
 use crate::{module_parser::ModuleParser, virtual_system::VirtualSystem};
 
-mod config;
+mod config_parser;
 mod module_parser;
 mod virtual_system;
 
 fn main() -> anyhow::Result<()> {
     let config = read_config("config.toml");
-    println!("{:?}", config);
     let mut parsed_modules = vec![];
     for module_config in config.module.iter() {
         let parsed_module = ModuleParser::from_configs(module_config, &config.global).parse()?;
@@ -35,7 +34,7 @@ fn main() -> anyhow::Result<()> {
     let build_dir = PathBuf::from("builds").join(build_id);
     VirtualSystem::build(build_dir, generated_links)
         .context("virtual system generation failed, possibly conflicting modules")?
-        .deploy()?;
+        .deploy(true)?;
     // glob("./*")
     //     .unwrap()
     //     .flatten()
