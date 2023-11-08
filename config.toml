@@ -1,0 +1,16 @@
+[[module]]
+source = "modules/alacritty"
+target = "~"
+
+[[module]]
+source = "modules/kde"
+target = "~"
+
+[[module]]
+source = "modules/helix"
+target = "~"
+
+[[module]]
+source = "modules/fish"
+target = "~"
+
