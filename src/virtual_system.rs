@@ -185,7 +185,7 @@ impl VirtualSystem {
         verbose: bool,
         ignore_filenames: &[&str],
     ) -> anyhow::Result<()> {
-        println!("* deploying the virtual system under {:?}", self.path);
+        println!("* deploying the build under {:?}", self.path);
         let leaves = self.get_leaves();
         for leaf in leaves {
             // The target is already encoded in the leaf source.

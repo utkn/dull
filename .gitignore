@@ -2,4 +2,5 @@
 /modules
 /builds
 .dull-build
+.dull-state
 config.toml
