@@ -6,6 +6,7 @@ use walkdir::WalkDir;
 
 use crate::{
     config_parser::{GlobalConfig, ModuleConfig},
+    utils,
     virtual_system::ResolvedLink,
 };
 
@@ -100,31 +101,29 @@ impl TraversalStrategy {
 
 #[derive(Debug)]
 pub struct ModuleParser<'a> {
-    linkthis_filename: &'a str,
-    linkthese_filename: &'a str,
-    linkthis_paths: &'a Vec<PathBuf>,
-    linkthese_paths: &'a Vec<PathBuf>,
-    source_path: &'a PathBuf,
+    module_config: &'a ModuleConfig,
+    global_config: &'a GlobalConfig,
 }
 
 impl<'a> ModuleParser<'a> {
-    pub fn from_configs(module_config: &'a ModuleConfig, global_config: &'a GlobalConfig) -> Self {
+    pub fn from_config(module_config: &'a ModuleConfig, global_config: &'a GlobalConfig) -> Self {
         Self {
-            source_path: &module_config.source,
-            linkthis_filename: &global_config.linkthis_file,
-            linkthese_filename: &global_config.linkthese_file,
-            linkthis_paths: &module_config.linkthis,
-            linkthese_paths: &module_config.linkthese,
+            module_config,
+            global_config,
         }
     }
 
     pub fn parse(self) -> anyhow::Result<Module> {
-        println!("* parsing module {:?}", self.source_path);
-        if !self.source_path.is_dir() {
-            bail!("module path {:?} is not a directory", self.source_path);
+        let source = &self.module_config.source;
+        println!("* parsing module {:?}", source);
+        if !source.is_dir() {
+            bail!(
+                "module path {:?} is not a directory",
+                self.module_config.source
+            );
         }
         // Read the directives from all the files under the module source root.
-        let all_files = WalkDir::new(self.source_path.clone())
+        let all_files = WalkDir::new(source)
             .into_iter()
             .flatten()
             .flat_map(|dir_entry| {
@@ -137,9 +136,9 @@ impl<'a> ModuleParser<'a> {
             .iter()
             .flat_map(|(parent, file)| {
                 let file_name = file.file_name()?.to_string_lossy();
-                if file_name == self.linkthis_filename {
+                if file_name == self.global_config.linkthis_file {
                     Some(TraversalDirective::LinkThis(parent))
-                } else if file_name == self.linkthese_filename {
+                } else if file_name == self.global_config.linkthese_file {
                     Some(TraversalDirective::LinkThese(parent))
                 } else {
                     None
@@ -148,24 +147,26 @@ impl<'a> ModuleParser<'a> {
             .collect_vec();
         // Read directives from the configuration.
         directives.extend(
-            self.linkthis_paths
-                .into_iter()
+            self.module_config
+                .linkthis
+                .iter()
                 .map(|p| TraversalDirective::LinkThis(p)),
         );
         directives.extend(
-            self.linkthese_paths
-                .into_iter()
+            self.module_config
+                .linkthese
+                .iter()
                 .map(|p| TraversalDirective::LinkThese(p)),
         );
         println!("collected directives {:?}", directives);
         let mut collected_paths = vec![];
-        let mut frontier = vec![self.source_path.clone()];
+        let mut frontier = vec![source.clone()];
         while frontier.len() > 0 {
             let curr_path = frontier.pop().expect("could not pop from the frontier");
             match TraversalStrategy::try_determine(
                 curr_path,
                 &directives,
-                &[self.linkthis_filename, self.linkthese_filename],
+                &utils::ignore_filenames(self.global_config),
             ) {
                 Ok(strategy) => match strategy {
                     TraversalStrategy::LinkThis(path) => {
@@ -190,7 +191,7 @@ impl<'a> ModuleParser<'a> {
             }
         }
         Ok(Module {
-            module_path: self.source_path.clone(),
+            module_path: source.clone(),
             sources: collected_paths,
         })
     }

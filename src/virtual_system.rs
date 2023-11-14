@@ -3,7 +3,13 @@ use std::path::PathBuf;
 use anyhow::Context;
 use itertools::Itertools;
 use path_absolutize::Absolutize;
+use rand::Rng;
 use walkdir::WalkDir;
+
+use crate::{
+    config_parser::{Config, GlobalConfig, ModuleConfig},
+    module_parser::ModuleParser,
+};
 
 #[derive(Clone, Debug)]
 pub struct ResolvedLink {
@@ -33,14 +39,65 @@ impl ResolvedLink {
     }
 }
 
-pub struct VirtualSystem {
-    pub path: PathBuf,
+pub struct VirtualSystemBuilder<'a> {
+    modules_config: &'a [ModuleConfig],
+    global_config: &'a GlobalConfig,
 }
 
-impl VirtualSystem {
-    pub fn build<P: Into<PathBuf>>(root: P, links: Vec<ResolvedLink>) -> anyhow::Result<Self> {
+impl<'a> VirtualSystemBuilder<'a> {
+    pub fn from_config(config: &'a Config) -> Self {
+        Self {
+            modules_config: &config.module,
+            global_config: &config.global,
+        }
+    }
+
+    pub fn build(self, build_name: Option<String>, verbose: bool) -> anyhow::Result<VirtualSystem> {
+        let mut parsed_modules = vec![];
+        for module_config in self.modules_config.iter() {
+            let parsed_module =
+                ModuleParser::from_config(module_config, &self.global_config).parse()?;
+            parsed_modules.push(parsed_module);
+        }
+        let generated_links = parsed_modules
+            .into_iter()
+            .zip(self.modules_config.iter())
+            .flat_map(|(m, conf)| m.emplace(conf.target.clone()))
+            .collect_vec();
+        for link in generated_links.iter() {
+            if verbose {
+                println!("{:?} => {:?}", link.abs_target, link.abs_source);
+            }
+        }
+        let effective_build_name = if let Some(build_name) = build_name {
+            build_name
+        } else {
+            format!("{}", rand::thread_rng().gen::<u32>())
+        };
+        let build_dir = PathBuf::from("builds").join(&effective_build_name);
+        Self::build_at_root(build_dir.clone(), generated_links, verbose)
+            .context("virtual system generation failed, possibly conflicting modules")?;
+        // Write the build information
+        std::fs::write(
+            build_dir.join(&self.global_config.build_file),
+            format!("{}", effective_build_name),
+        )
+        .context("could not generate the build information")?;
+        Ok(VirtualSystem {
+            name: effective_build_name,
+            path: build_dir,
+        })
+    }
+
+    fn build_at_root<P: Into<PathBuf>>(
+        root: P,
+        links: Vec<ResolvedLink>,
+        verbose: bool,
+    ) -> anyhow::Result<()> {
         let root: PathBuf = root.into();
-        println!("* creating a virtual system under {:?}", root);
+        if verbose {
+            println!("* creating a virtual system under {:?}", root);
+        }
         for link in links.into_iter() {
             let mut curr_virt_target = root.clone();
             let relativized_target = if link.abs_target.is_absolute() {
@@ -67,20 +124,67 @@ impl VirtualSystem {
                 curr_virt_target, link.abs_source,
             ))?;
         }
-        Ok(Self { path: root })
+        Ok(())
+    }
+}
+
+pub struct VirtualSystem {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+impl VirtualSystem {
+    pub fn read(path: PathBuf, build_file_name: &str) -> anyhow::Result<Self> {
+        let build_file_path = path.join(build_file_name);
+        let build_name = std::fs::read_to_string(&build_file_path).context(format!(
+            "could not read the build file {:?}",
+            build_file_path
+        ))?;
+        Ok(Self {
+            path,
+            name: build_name,
+        })
     }
 
-    pub fn deploy(self, clear_target: bool) -> anyhow::Result<()> {
-        println!("* deploying the virtual system under {:?}", self.path);
-        let leafs = WalkDir::new(self.path.clone())
+    fn get_leaves(&self) -> Vec<PathBuf> {
+        WalkDir::new(&self.path)
             .follow_links(false)
+            .follow_root_links(false)
             .into_iter()
             .flatten()
             .map(|p| p.path().to_path_buf())
             .filter(|p| p.is_symlink())
-            .collect_vec();
-        for source in leafs {
-            // The target is already encoded in the
+            .collect_vec()
+    }
+
+    pub fn undeploy(self, verbose: bool) -> anyhow::Result<()> {
+        println!("* undeploying the build under {:?}", self.path);
+        let leaves = self.get_leaves();
+        for source in leaves {
+            // The target is already encoded in the leaf source.
+            let target = PathBuf::from("/").join(source.strip_prefix(&self.path).context("")?);
+            let abs_target = ResolvedLink::expand_path(target)?;
+            if verbose {
+                println!("remove {:?}", abs_target);
+            }
+            std::fs::remove_dir_all(&abs_target)
+                .context(format!("could not remove {:?}", abs_target))?;
+        }
+        println!("* done =)");
+        Ok(())
+    }
+
+    pub fn deploy(
+        self,
+        hard: bool,
+        clear_target: bool,
+        verbose: bool,
+        ignore_filenames: &[&str],
+    ) -> anyhow::Result<()> {
+        println!("* deploying the virtual system under {:?}", self.path);
+        let leaves = self.get_leaves();
+        for source in leaves {
+            // The target is already encoded in the leaf source.
             let target = PathBuf::from("/").join(source.strip_prefix(&self.path).context("")?);
             let abs_target = ResolvedLink::expand_path(target)?;
             let abs_source = ResolvedLink::expand_path(source)?;
@@ -88,6 +192,7 @@ impl VirtualSystem {
                 _ = std::fs::remove_dir_all(&abs_target);
                 _ = std::fs::remove_file(&abs_target);
             }
+            // Create the directories leading to the target.
             abs_target
                 .parent()
                 .context(format!("could not get the parent of {:?}", abs_target))
@@ -95,10 +200,54 @@ impl VirtualSystem {
                     std::fs::create_dir_all(target_parent)
                         .context(format!("could not create the dirs {:?}", abs_target))
                 })?;
-            std::os::unix::fs::symlink(&abs_source, &abs_target).context(format!(
-                "could not create the symlink {:?} => {:?}",
+            if hard {
+                let inner = WalkDir::new(&abs_source)
+                    .follow_links(true)
+                    .follow_root_links(true)
+                    .into_iter()
+                    .flatten()
+                    .map(|p| p.path().to_path_buf())
+                    .filter(|p| p.is_file())
+                    .filter(|p| {
+                        p.file_name()
+                            .map(|file_name| file_name.to_string_lossy())
+                            .map(|file_name| !ignore_filenames.contains(&file_name.as_ref()))
+                            .unwrap_or(false)
+                    });
+                for inner_abs_source in inner {
+                    let inner_abs_target =
+                        abs_target.join(inner_abs_source.strip_prefix(&abs_source).unwrap());
+                    // Create the directories leading to the inner target.
+                    inner_abs_target
+                        .parent()
+                        .context(format!("could not get the parent of {:?}", abs_target))
+                        .and_then(|target_parent| {
+                            std::fs::create_dir_all(target_parent)
+                                .context(format!("could not create the dirs {:?}", abs_target))
+                        })?;
+                    if verbose {
+                        println!("copy {:?} to {:?}", inner_abs_source, inner_abs_target);
+                    }
+                    if let Ok(_) = std::fs::metadata(&inner_abs_target) {
+                        anyhow::bail!(
+                            "file at {:?} already exists, use --force to clear the target paths",
+                            inner_abs_target
+                        );
+                    }
+                    std::fs::copy(&inner_abs_source, &inner_abs_target).context(format!(
+                        "could not copy {:?} to {:?}",
+                        inner_abs_source, inner_abs_target
+                    ))?;
+                }
+            } else {
+                if verbose {
+                    println!("link {:?} to {:?}", abs_target, abs_source);
+                }
+                std::os::unix::fs::symlink(&abs_source, &abs_target).context(format!(
+                "could not create the symlink {:?} to {:?}, use --force to clear the target paths",
                 abs_target, abs_source,
             ))?;
+            }
         }
         println!("* done =)");
         Ok(())
