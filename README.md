@@ -26,7 +26,7 @@ Create a configuration file `config.toml` at the root. The configuration file sh
         └── themes
             └── custom.toml
 ```
-Accordingly, the configuration file `config.toml` will contain the following:
+Accordingly, the configuration file `config.toml` might contain the following:
 
 ```toml
 # config.toml
