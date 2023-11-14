@@ -77,7 +77,21 @@ fn main() -> anyhow::Result<()> {
             let virt_system = VirtualSystem::read(last_build_path, &config.global.build_file)?;
             virt_system.undeploy(cli.verbose)?;
         }
-        CliCommand::Info => todo!(),
+        CliCommand::Info => {
+            let latest_build = utils::read_state(".", &config.global)
+                .and_then(|s| VirtualSystem::read(s.into(), &config.global.build_file))
+                .map(|vs| vs.name)
+                .unwrap_or(String::from("N/A"));
+            println!("Latest build: {:?}", latest_build);
+            let virt_systems = glob::glob("./**/.dull-build")
+                .context("could not query the filesystem for builds")?
+                .flatten()
+                .flat_map(|path| path.parent().map(|p| p.to_path_buf()))
+                .flat_map(|path| VirtualSystem::read(path, &config.global.build_file));
+            for virt_system in virt_systems {
+                println!("=> build {:?} at {:?}", virt_system.name, virt_system.path);
+            }
+        }
     }
     Ok(())
 }

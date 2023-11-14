@@ -128,6 +128,7 @@ impl<'a> VirtualSystemBuilder<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct VirtualSystem {
     pub name: String,
     pub path: PathBuf,
@@ -141,7 +142,7 @@ impl VirtualSystem {
             build_file_path
         ))?;
         Ok(Self {
-            path,
+            path: path,
             name: build_name,
         })
     }
@@ -160,9 +161,12 @@ impl VirtualSystem {
     pub fn undeploy(self, verbose: bool) -> anyhow::Result<()> {
         println!("* undeploying the build under {:?}", self.path);
         let leaves = self.get_leaves();
-        for source in leaves {
+        for leaf in leaves {
             // The target is already encoded in the leaf source.
-            let target = PathBuf::from("/").join(source.strip_prefix(&self.path).context("")?);
+            let target = PathBuf::from("/").join(
+                leaf.strip_prefix(&self.path)
+                    .context("leaf path is malformed")?,
+            );
             let abs_target = ResolvedLink::expand_path(target)?;
             if verbose {
                 println!("remove {:?}", abs_target);
@@ -183,11 +187,14 @@ impl VirtualSystem {
     ) -> anyhow::Result<()> {
         println!("* deploying the virtual system under {:?}", self.path);
         let leaves = self.get_leaves();
-        for source in leaves {
+        for leaf in leaves {
             // The target is already encoded in the leaf source.
-            let target = PathBuf::from("/").join(source.strip_prefix(&self.path).context("")?);
+            let target = PathBuf::from("/").join(
+                leaf.strip_prefix(&self.path)
+                    .context("leaf path is malformed")?,
+            );
             let abs_target = ResolvedLink::expand_path(target)?;
-            let abs_source = ResolvedLink::expand_path(source)?;
+            let abs_source = ResolvedLink::expand_path(leaf)?;
             if clear_target {
                 _ = std::fs::remove_dir_all(&abs_target);
                 _ = std::fs::remove_file(&abs_target);
@@ -201,13 +208,16 @@ impl VirtualSystem {
                         .context(format!("could not create the dirs {:?}", abs_target))
                 })?;
             if hard {
+                // Traverse through the regular files indicated by the leaf.
                 let inner = WalkDir::new(&abs_source)
                     .follow_links(true)
                     .follow_root_links(true)
                     .into_iter()
                     .flatten()
                     .map(|p| p.path().to_path_buf())
+                    // Only consider regular files.
                     .filter(|p| p.is_file())
+                    // Make sure that the files are not in the ignored filenames list.
                     .filter(|p| {
                         p.file_name()
                             .map(|file_name| file_name.to_string_lossy())
@@ -240,12 +250,18 @@ impl VirtualSystem {
                     ))?;
                 }
             } else {
+                // Get the original source in the module directory.
+                let abs_source_canon = abs_source.canonicalize().context(format!(
+                    "could not canonicalize the source {:?}",
+                    abs_source
+                ))?;
                 if verbose {
-                    println!("link {:?} to {:?}", abs_target, abs_source);
+                    println!("link {:?} to {:?}", abs_target, abs_source_canon);
                 }
-                std::os::unix::fs::symlink(&abs_source, &abs_target).context(format!(
+                // Create the symlink.
+                std::os::unix::fs::symlink(&abs_source_canon, &abs_target).context(format!(
                 "could not create the symlink {:?} to {:?}, use --force to clear the target paths",
-                abs_target, abs_source,
+                abs_target, abs_source_canon,
             ))?;
             }
         }
