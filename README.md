@@ -71,6 +71,6 @@ $ dull undeploy
 #### Directives
 You can set *directive*s to limit the recursive linking. There are two possible directives: `linkthis`, and `linkthese`.
 
-A `linkthis` directive can be added by creating a `.dull-linkthis` file under a folder in one of your modules. The folder containing this directive will be linked directly. Similarly, a `linkthis` directive can be added by creating a `.dull-linkthese` file. All the files and folders that are in the same directory with this file will be linked directly.
+A `linkthis` directive can be added by creating a `.dull-linkthis` file under a folder in one of your modules. The folder containing this marker file will be linked directly. Similarly, a `linkthis` directive can be added by creating a `.dull-linkthese` file. All the files and folders that are in the same directory with this marker file will be linked directly.
 
 These directives can alternatively be specified in the configuration file, instead of creating marker files as described above.
