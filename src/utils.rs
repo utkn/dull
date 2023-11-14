@@ -29,7 +29,7 @@ pub fn read_config<P: Into<PathBuf>>(p: P) -> Config {
 
 pub fn read_state<P: Into<PathBuf>>(p: P, global_config: &GlobalConfig) -> anyhow::Result<String> {
     let root_path = p.into();
-    let state_file = root_path.join(&global_config.build_file);
+    let state_file = root_path.join(&global_config.state_file);
     std::fs::read_to_string(&state_file)
         .context(format!("could not read the state file {:?}", state_file))
 }
@@ -40,7 +40,7 @@ pub fn set_state<P: Into<PathBuf>>(
     contents: &str,
 ) -> anyhow::Result<()> {
     let root_path = p.into();
-    let state_file = root_path.join(&global_config.build_file);
+    let state_file = root_path.join(&global_config.state_file);
     std::fs::write(&state_file, contents)
         .context(format!("could not write the state file {:?}", state_file))
 }
