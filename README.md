@@ -4,7 +4,7 @@ A dull dotfile manager
 ### Installation
 Clone this repository, `cd` into it and invoke `cargo` to build and install it for you:
 ```bash
-$ cargo install
+$ cargo install --path .
 ```
 
 ### Quick Start
