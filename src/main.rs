@@ -69,12 +69,14 @@ fn main() -> anyhow::Result<()> {
                     .into()
             };
             let virt_system = VirtualSystem::read(effective_build_path, &config.global.build_file)?
-                .prepare_deployment(force, cli.verbose)?;
+                .prepare_deployment(force, cli.verbose)
+                .context("could not prepare for deployment")?;
             let res = if hard {
                 virt_system.hard_deploy(&ignore_filenames, cli.verbose)
             } else {
                 virt_system.soft_deploy(cli.verbose)
-            }?;
+            }
+            .context("deployment failed")?;
             res.display_report();
         }
         CliCommand::Undeploy => {
@@ -82,7 +84,10 @@ fn main() -> anyhow::Result<()> {
                 .context("no build was deployed, cannot undeploy")?
                 .into();
             let virt_system = VirtualSystem::read(last_build_path, &config.global.build_file)?;
-            virt_system.undeploy(cli.verbose)?.display_report();
+            virt_system
+                .undeploy(cli.verbose)
+                .context("undeployment failed")?
+                .display_report();
         }
         CliCommand::Info => {
             let latest_build = utils::get_state(".", &config.global)
