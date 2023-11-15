@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
                 VirtualSystemBuilder::from_config(&config).build(name, cli.verbose)?;
             utils::set_state(".", &config.global, virt_system.path.to_str().unwrap())?;
             println!(
-                "build {:?} complete at path {:?}",
+                "Build {:?} complete at path {:?}",
                 virt_system.name, virt_system.path
             )
         }
@@ -71,9 +71,6 @@ fn main() -> anyhow::Result<()> {
             let virt_system = VirtualSystem::read(effective_build_path, &config.global.build_file)?;
             virt_system
                 .deploy(hard, force, &ignore_filenames)
-                .context(
-                    "could not deploy, maybe use --force to clear the target files/directories",
-                )
                 .and_then(|tx| tx.run_atomic(cli.verbose))?
                 .display_report();
         }

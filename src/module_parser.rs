@@ -118,7 +118,7 @@ impl<'a> ModuleParser<'a> {
 
     pub fn parse(self) -> anyhow::Result<Module> {
         let source = &self.module_config.source;
-        println!("* parsing module {:?}", source);
+        println!("Parsing module {:?}", source);
         if !source.is_dir() {
             anyhow::bail!(
                 "module path {:?} is not a directory",
@@ -191,7 +191,7 @@ impl<'a> ModuleParser<'a> {
                 },
                 Err(err) => {
                     println!(
-                        "! skipping traversing {:?} due to error: {:?}",
+                        "Skipping traversing {:?} due to error: {:?}",
                         curr_path, err
                     )
                 }

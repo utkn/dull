@@ -177,13 +177,14 @@ impl FsTransaction {
     }
 
     pub fn run_haphazard(self, verbose: bool) -> anyhow::Result<FsTransactionResult> {
-        println!("Running haphazard transaction...");
+        println!("Running filesystem modifications...");
         for m in self.mods.into_iter() {
             if verbose {
                 println!("? {}", m);
             }
             match m.apply(None) {
                 Err(err) => {
+                    println!("✗ modification error");
                     return Ok(FsTransactionResult {
                         tx_result: Err(err),
                         rb_result: None,
@@ -215,7 +216,7 @@ impl FsTransaction {
                     history.push(m_inv);
                 }
                 Err(err) => {
-                    println!("✗ atomic transaction error, trying to roll back");
+                    println!("✗ transaction error, trying to roll back");
                     tx_err = Some(err.context("transaction failed"));
                     break;
                 }
