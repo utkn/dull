@@ -1,4 +1,4 @@
-use std::{env::join_paths, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use rand::Rng;
@@ -33,6 +33,7 @@ impl FsMod {
                 Ok(Self::RemoveAll(target))
             }
             FsMod::RemoveAll(path) => {
+                return Ok(Self::Nop);
                 let backup_file_name = format!("{}", rand::thread_rng().gen::<u32>());
                 let backup = backup_dir.join(backup_file_name);
                 utils::copy_recursively(&path, &backup, &[])
@@ -45,14 +46,18 @@ impl FsMod {
                 })
             }
             FsMod::CreateDirs(path) => {
-                let mut path_copy = path.clone();
-                let mut first_created_dir = None;
-                while path_copy.try_exists().unwrap_or(false) {
-                    first_created_dir = Some(path_copy.clone());
-                    if !path_copy.pop() {
+                let mut curr_subdir = path.clone();
+                let mut subdirs = vec![];
+                loop {
+                    subdirs.push(curr_subdir.clone());
+                    if !curr_subdir.pop() {
                         break;
                     }
                 }
+                let first_created_dir = subdirs
+                    .into_iter()
+                    .rev()
+                    .find(|subdir| !subdir.try_exists().unwrap_or(true));
                 std::fs::create_dir_all(&path)
                     .context(format!("could not create the dirs {:?}", path))?;
                 if let Some(first_created_dir) = first_created_dir {
@@ -114,14 +119,14 @@ impl FsTransaction {
         if rollback {
             println!("trying to rollback...");
             for m_inv in history.into_iter().rev() {
-                println!("reving {:?}", m_inv);
+                println!("=> {:?}", m_inv);
                 if let Err(err) = m_inv.apply(&PathBuf::from("/dev/null")) {
                     println!("! could not rollback: {:?}", err);
                     println!("! i am out, sorry i messed up your system =(");
-                    anyhow::bail!("fatal failure");
+                    anyhow::bail!("transaction failed destructively");
                 }
             }
-            anyhow::bail!("graceful failure");
+            anyhow::bail!("transaction failed gracefully");
         } else {
             println!("Transaction ran successfully");
             Ok(())
