@@ -15,28 +15,44 @@ mod virtual_system;
 #[command(author, version, about)]
 struct CliArgs {
     #[arg(short, long, value_name = "FILE", default_value = "config.toml")]
+    /// The configuration file to use
     config: PathBuf,
+
     #[arg(short, long, default_value = "false")]
+    /// Show more detailed information for debugging
     verbose: bool,
+
     #[command(subcommand)]
     command: CliCommand,
 }
 
 #[derive(clap::Subcommand)]
 enum CliCommand {
+    /// Build the modules and generates a virtual filesystem
     Build {
         #[arg(short, long)]
+        /// Name of the generated build
         name: Option<String>,
     },
+
+    /// Deploy a build to the system
     Deploy {
         #[arg(short, long, value_name = "PATH")]
+        /// Path to the build to deploy
         build: Option<PathBuf>,
+
         #[arg(long, default_value = "false")]
+        /// Perform a hard deploy
         hard: bool,
+
         #[arg(short, long, default_value = "false")]
+        /// Remove the targets before deployment (destructive, not advised)
         force: bool,
     },
+    /// Clear the deployed files of the latest build
     Undeploy,
+
+    /// Show information about the builds
     Info,
 }
 
