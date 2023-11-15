@@ -41,6 +41,7 @@ enum CliCommand {
 }
 
 fn main() -> anyhow::Result<()> {
+    panic!("do not run!!");
     let cli = CliArgs::parse();
     let config = utils::read_config(cli.config);
     match cli.command {
