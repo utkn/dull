@@ -46,7 +46,7 @@ impl FsTransaction {
                 Ok(_) => {}
             }
         }
-        println!("✓ transaction succeeded");
+        println!("✓ execution succeeded");
         return Ok(FsTransactionResult::success());
     }
 
