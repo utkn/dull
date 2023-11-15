@@ -45,13 +45,13 @@ fn main() -> anyhow::Result<()> {
     let config = utils::read_config(cli.config);
     match cli.command {
         CliCommand::Build { name } => {
-            let virt_system =
-                VirtualSystemBuilder::from_config(&config).build(name, cli.verbose)?;
-            utils::set_state(".", &config.global, virt_system.path.to_str().unwrap())?;
-            println!(
-                "Build {:?} complete at path {:?}",
-                virt_system.name, virt_system.path
-            )
+            let build_path = VirtualSystemBuilder::from_config(&config).build(name, cli.verbose)?;
+            utils::set_state(
+                ".",
+                &config.global,
+                &build_path.clone().into_os_string().to_string_lossy(),
+            )?;
+            println!("Build complete at path {:?}", build_path)
         }
         CliCommand::Deploy {
             build: build_path,
@@ -68,21 +68,21 @@ fn main() -> anyhow::Result<()> {
                     ))?
                     .into()
             };
-            let virt_system = VirtualSystem::read(effective_build_path, &config.global.build_file)?;
-            virt_system
-                .deploy(hard, force, &ignore_filenames)
-                .and_then(|tx| tx.run_atomic(cli.verbose))?
-                .display_report();
+            let virt_system = VirtualSystem::read(effective_build_path, &config.global.build_file)?
+                .prepare_deployment(force, cli.verbose)?;
+            let res = if hard {
+                virt_system.hard_deploy(&ignore_filenames, cli.verbose)
+            } else {
+                virt_system.soft_deploy(cli.verbose)
+            }?;
+            res.display_report();
         }
         CliCommand::Undeploy => {
             let last_build_path = utils::get_state(".", &config.global)
                 .context("no build was deployed, cannot undeploy")?
                 .into();
             let virt_system = VirtualSystem::read(last_build_path, &config.global.build_file)?;
-            virt_system
-                .undeploy()
-                .and_then(|tx| tx.run_atomic(cli.verbose))?
-                .display_report();
+            virt_system.undeploy(cli.verbose)?.display_report();
         }
         CliCommand::Info => {
             let latest_build = utils::get_state(".", &config.global)

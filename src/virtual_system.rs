@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{marker::PhantomData, path::PathBuf};
 
 use anyhow::Context;
 use itertools::Itertools;
@@ -9,8 +9,7 @@ use walkdir::WalkDir;
 use crate::{
     config_parser::{Config, GlobalConfig, ModuleConfig},
     module_parser::ModuleParser,
-    transaction::{FsMod, FsTransaction},
-    utils,
+    transaction::{tx_gen, FsPrimitive, FsTransaction, FsTransactionResult},
 };
 
 #[derive(Clone, Debug)]
@@ -20,7 +19,7 @@ pub struct ResolvedLink {
 }
 
 impl ResolvedLink {
-    fn expand_path(path: PathBuf) -> anyhow::Result<PathBuf> {
+    fn expand_path(path: &PathBuf) -> anyhow::Result<PathBuf> {
         let expanded_path = expanduser::expanduser(path.as_os_str().to_string_lossy())
             .context(format!("could not expand the path {:?}", path))?;
         let absolute_path = expanded_path
@@ -33,7 +32,7 @@ impl ResolvedLink {
         absolute_path
     }
 
-    pub fn new(source: PathBuf, target: PathBuf) -> anyhow::Result<Self> {
+    pub fn new(source: &PathBuf, target: &PathBuf) -> anyhow::Result<Self> {
         Ok(Self {
             abs_source: ResolvedLink::expand_path(source)?,
             abs_target: ResolvedLink::expand_path(target)?,
@@ -54,7 +53,7 @@ impl<'a> VirtualSystemBuilder<'a> {
         }
     }
 
-    pub fn build(self, build_name: Option<String>, verbose: bool) -> anyhow::Result<VirtualSystem> {
+    pub fn build(self, build_name: Option<String>, verbose: bool) -> anyhow::Result<PathBuf> {
         let mut parsed_modules = vec![];
         for module_config in self.modules_config.iter() {
             let parsed_module =
@@ -74,18 +73,15 @@ impl<'a> VirtualSystemBuilder<'a> {
         // Generate the virtual system.
         let build_dir = PathBuf::from("builds").join(&effective_build_name);
         Self::build_at_root(build_dir.clone(), generated_links)
-            .and_then(|tx| tx.run_haphazard(verbose))?
-            .tx_result?;
+            .and_then(|tx| tx.with_name("build").run_haphazard(verbose))?
+            .as_tx_result()?;
         // Write the build information
         std::fs::write(
             build_dir.join(&self.global_config.build_file),
             format!("{}", effective_build_name),
         )
         .context("could not generate the build information")?;
-        Ok(VirtualSystem {
-            name: effective_build_name,
-            path: build_dir,
-        })
+        Ok(build_dir)
     }
 
     fn build_at_root<P: Into<PathBuf>>(
@@ -102,14 +98,16 @@ impl<'a> VirtualSystemBuilder<'a> {
                 link.abs_target.as_path()
             };
             curr_virt_target.push(relativized_target);
-            curr_virt_target = ResolvedLink::expand_path(curr_virt_target)?;
+            curr_virt_target = ResolvedLink::expand_path(&curr_virt_target)?;
             // Create the virtual directory if it does not exist.
             let curr_virt_target_parent = curr_virt_target.parent().context(format!(
                 "could not get the parent of {:?}",
                 curr_virt_target
             ))?;
-            tx.push(FsMod::CreateDirs(curr_virt_target_parent.to_path_buf()));
-            tx.push(FsMod::Link {
+            tx.push(FsPrimitive::TryCreateDirs(
+                curr_virt_target_parent.to_path_buf(),
+            ));
+            tx.push(FsPrimitive::Link {
                 original: link.abs_source,
                 target: curr_virt_target,
             });
@@ -118,13 +116,18 @@ impl<'a> VirtualSystemBuilder<'a> {
     }
 }
 
+pub struct Deployable;
+pub struct Undeployable;
+
 #[derive(Clone, Debug)]
-pub struct VirtualSystem {
+pub struct VirtualSystem<T> {
     pub name: String,
     pub path: PathBuf,
+    pub pd: PhantomData<T>,
 }
 
-impl VirtualSystem {
+impl VirtualSystem<Undeployable> {
+    /// Reads the virtual system at the given path.
     pub fn read(path: PathBuf, build_file_name: &str) -> anyhow::Result<Self> {
         let build_file_path = path.join(build_file_name);
         let build_name = std::fs::read_to_string(&build_file_path).context(format!(
@@ -134,9 +137,60 @@ impl VirtualSystem {
         Ok(Self {
             path,
             name: build_name,
+            pd: Default::default(),
         })
     }
 
+    /// Prepares the filesystem for deployment.
+    pub fn prepare_deployment(
+        self,
+        clear_target: bool,
+        verbose: bool,
+    ) -> anyhow::Result<VirtualSystem<Deployable>> {
+        let mut tx = FsTransaction::empty();
+        let leaves = self.get_leaves();
+        for leaf in leaves {
+            let (_, abs_target) = self.parse_leaf(&leaf)?;
+            // Clear the target.
+            if clear_target && abs_target.symlink_metadata().is_ok() {
+                tx.append(tx_gen::remove_any(&abs_target)?);
+            }
+            // Create the directories leading to the target.
+            let abs_target_parent = abs_target
+                .parent()
+                .context(format!("could not get the parent of {:?}", abs_target))?;
+            tx.push(FsPrimitive::TryCreateDirs(abs_target_parent.to_path_buf()));
+        }
+        let deployment_result = tx.with_name("prepare").run_atomic(verbose)?;
+        deployment_result.display_report();
+        deployment_result.as_tx_result()?;
+        Ok(VirtualSystem {
+            name: self.name,
+            path: self.path,
+            pd: Default::default(),
+        })
+    }
+}
+
+impl<T> VirtualSystem<T> {
+    /// From a leaf node, extracts and returns the absolute source and target paths.
+    fn parse_leaf(&self, leaf: &PathBuf) -> anyhow::Result<(PathBuf, PathBuf)> {
+        // The target is already encoded in the leaf source.
+        let target = PathBuf::from("/").join(
+            leaf.strip_prefix(&self.path)
+                .context("leaf path is malformed")?,
+        );
+        let abs_target = ResolvedLink::expand_path(&target)?;
+        let abs_source = ResolvedLink::expand_path(leaf)?;
+        // Get the original source, pointing to the regular file in the module directory.
+        let abs_source_canon = abs_source.canonicalize().context(format!(
+            "could not canonicalize the source {:?}",
+            abs_source
+        ))?;
+        Ok((abs_source_canon, abs_target))
+    }
+
+    /// Returns the leaves of the virtual system.
     fn get_leaves(&self) -> Vec<PathBuf> {
         WalkDir::new(&self.path)
             .follow_links(false)
@@ -148,7 +202,7 @@ impl VirtualSystem {
             .collect_vec()
     }
 
-    pub fn undeploy(self) -> anyhow::Result<FsTransaction> {
+    pub fn undeploy(self, verbose: bool) -> anyhow::Result<FsTransactionResult> {
         let mut tx = FsTransaction::empty();
         let leaves = self.get_leaves();
         for leaf in leaves {
@@ -157,98 +211,76 @@ impl VirtualSystem {
                 leaf.strip_prefix(&self.path)
                     .context("leaf path is malformed")?,
             );
-            let abs_target = ResolvedLink::expand_path(target)?;
-            if abs_target.is_symlink() || abs_target.is_file() {
-                tx.push(FsMod::RemoveFile(abs_target));
-            } else {
-                tx.append(utils::remove_dir_tx(&abs_target)?);
-            }
+            let abs_target = ResolvedLink::expand_path(&target)?;
+            tx.append(tx_gen::remove_any(&abs_target)?);
         }
-        Ok(tx)
+        tx.with_name("undeploy").run_atomic(verbose)
+    }
+}
+
+impl VirtualSystem<Deployable> {
+    pub fn soft_deploy(self, verbose: bool) -> anyhow::Result<FsTransactionResult> {
+        let mut tx = FsTransaction::empty();
+        let leaves = self.get_leaves();
+        for leaf in leaves {
+            let (source, target) = self
+                .parse_leaf(&leaf)
+                .context(format!("could not parse the leaf {:?}", leaf))?;
+            tx.push(FsPrimitive::Link {
+                original: source,
+                target,
+            });
+        }
+        tx.with_name("soft deploy").run_atomic(verbose)
     }
 
-    pub fn deploy(
+    pub fn hard_deploy(
         self,
-        hard: bool,
-        clear_target: bool,
         ignore_filenames: &[&str],
-    ) -> anyhow::Result<FsTransaction> {
+        verbose: bool,
+    ) -> anyhow::Result<FsTransactionResult> {
         let mut tx = FsTransaction::empty();
         let leaves = self.get_leaves();
         for leaf in leaves {
-            // The target is already encoded in the leaf source.
-            let target = PathBuf::from("/").join(
-                leaf.strip_prefix(&self.path)
-                    .context("leaf path is malformed")?,
-            );
-            let abs_target = ResolvedLink::expand_path(target)?;
-            let abs_source = ResolvedLink::expand_path(leaf)?;
-            // Clear the target.
-            if clear_target && abs_target.symlink_metadata().is_ok() {
-                if abs_target.is_symlink() || abs_target.is_file() {
-                    tx.push(FsMod::RemoveFile(abs_target.clone()));
+            let (source, target) = self
+                .parse_leaf(&leaf)
+                .context(format!("could not parse the leaf {:?}", leaf))?;
+            // Traverse through the regular files indicated by the leaf.
+            let inner = WalkDir::new(&source)
+                .follow_root_links(true)
+                .follow_links(false)
+                .into_iter()
+                .flatten()
+                .map(|p| p.path().to_path_buf())
+                // Only consider regular files or symlinks.
+                .filter(|p| p.is_symlink() || p.is_file())
+                // Make sure that the files are not in the ignored filenames list.
+                .filter(|p| {
+                    p.file_name()
+                        .map(|file_name| file_name.to_string_lossy())
+                        .map(|file_name| !ignore_filenames.contains(&file_name.as_ref()))
+                        .unwrap_or(false)
+                });
+            for inner_source in inner {
+                let inner_target = if inner_source == source {
+                    target.clone()
                 } else {
-                    tx.append(utils::remove_dir_tx(&abs_target)?);
-                }
-            }
-            // Create the directories leading to the target.
-            let abs_target_parent = abs_target
-                .parent()
-                .context(format!("could not get the parent of {:?}", abs_target))?;
-            tx.push(FsMod::CreateDirs(abs_target_parent.to_path_buf()));
-            // Get the original source, pointing to the regular file in the module directory.
-            let abs_source_canon = abs_source.canonicalize().context(format!(
-                "could not canonicalize the source {:?}",
-                abs_source
-            ))?;
-            // Perform the actual linking.
-            if hard {
-                // Traverse through the regular files indicated by the leaf.
-                let inner = WalkDir::new(&abs_source_canon)
-                    .follow_root_links(true)
-                    .follow_links(false)
-                    .into_iter()
-                    .flatten()
-                    .map(|p| p.path().to_path_buf())
-                    // Only consider regular files or symlinks.
-                    .filter(|p| p.is_file() || p.is_symlink())
-                    // Make sure that the files are not in the ignored filenames list.
-                    .filter(|p| {
-                        p.file_name()
-                            .map(|file_name| file_name.to_string_lossy())
-                            .map(|file_name| !ignore_filenames.contains(&file_name.as_ref()))
-                            .unwrap_or(false)
-                    });
-                for inner_source in inner {
-                    let inner_target =
-                        abs_target.join(inner_source.strip_prefix(&abs_source_canon).unwrap());
-                    // Create the directories leading to the inner target.
-                    let inner_target_parent = inner_target
-                        .parent()
-                        .context(format!("could not get the parent of {:?}", inner_target))?;
-                    let create_dirs_mod = FsMod::CreateDirs(inner_target_parent.to_path_buf());
-                    if !tx.mods.contains(&create_dirs_mod)
-                        && inner_target_parent.symlink_metadata().is_err()
-                    {
-                        tx.push(create_dirs_mod);
-                    }
-                    tx.push(FsMod::CopyFile {
-                        source: inner_source,
-                        target: inner_target,
-                    });
-                }
-            } else {
-                // Create the symlink.
-                let abs_target_parent = abs_target
+                    target.join(inner_source.strip_prefix(&source).unwrap())
+                };
+                // Create the directories leading to the inner target.
+                let inner_target_parent = inner_target
                     .parent()
-                    .context(format!("could not get the parent of {:?}", abs_target))?;
-                tx.push(FsMod::CreateDirs(abs_target_parent.to_path_buf()));
-                tx.push(FsMod::Link {
-                    original: abs_source_canon,
-                    target: abs_target,
+                    .context(format!("could not get the parent of {:?}", inner_target))?;
+                let create_dirs_mod = FsPrimitive::TryCreateDirs(inner_target_parent.to_path_buf());
+                if !tx.mods.contains(&create_dirs_mod) {
+                    tx.push(create_dirs_mod);
+                }
+                tx.push(FsPrimitive::CopyFile {
+                    source: inner_source,
+                    target: inner_target,
                 });
             }
         }
-        Ok(tx)
+        tx.with_name("hard deploy").run_atomic(verbose)
     }
 }

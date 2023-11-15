@@ -33,7 +33,7 @@ impl Module {
             .flat_map(|(source, source_stripped)| {
                 let mut resolved_target = target_prefix.clone();
                 resolved_target.push(source_stripped);
-                ResolvedLink::new(source, resolved_target)
+                ResolvedLink::new(&source, &resolved_target)
             })
             .collect_vec()
     }
