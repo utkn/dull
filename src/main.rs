@@ -7,6 +7,7 @@ use virtual_system::{VirtualSystem, VirtualSystemBuilder};
 
 mod config_parser;
 mod module_parser;
+mod transaction;
 mod utils;
 mod virtual_system;
 
@@ -61,24 +62,31 @@ fn main() -> anyhow::Result<()> {
             let effective_build_path = if let Some(given_path) = build_path {
                 given_path
             } else {
-                utils::read_state(".", &config.global)
+                utils::get_state(".", &config.global)
                     .context(format!(
                         "no state was found, explicitly supply the target using --build"
                     ))?
                     .into()
             };
             let virt_system = VirtualSystem::read(effective_build_path, &config.global.build_file)?;
-            virt_system.deploy(hard, force, cli.verbose, &ignore_filenames)?;
+            virt_system
+                .deploy(hard, force, &ignore_filenames)
+                .context(
+                    "could not deploy, maybe use --force to clear the target files/directories",
+                )
+                .and_then(|tx| tx.run_atomic(cli.verbose))?;
         }
         CliCommand::Undeploy => {
-            let last_build_path = utils::read_state(".", &config.global)
+            let last_build_path = utils::get_state(".", &config.global)
                 .context("no build was deployed, cannot undeploy")?
                 .into();
             let virt_system = VirtualSystem::read(last_build_path, &config.global.build_file)?;
-            virt_system.undeploy(cli.verbose)?;
+            virt_system
+                .undeploy()
+                .and_then(|tx| tx.run_atomic(cli.verbose))?;
         }
         CliCommand::Info => {
-            let latest_build = utils::read_state(".", &config.global)
+            let latest_build = utils::get_state(".", &config.global)
                 .and_then(|s| VirtualSystem::read(s.into(), &config.global.build_file))
                 .map(|vs| vs.name)
                 .unwrap_or(String::from("N/A"));

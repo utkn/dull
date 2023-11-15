@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use itertools::Itertools;
 use walkdir::WalkDir;
 
@@ -13,11 +13,14 @@ use crate::{
 #[derive(Default, Debug, Clone)]
 pub struct Module {
     module_path: PathBuf,
+    /// Denotes the list of files/folders that are exposed by this module and should be linked.
     sources: Vec<PathBuf>,
 }
 
 impl Module {
-    pub fn emplace(self, target_path: PathBuf) -> Vec<ResolvedLink> {
+    /// Consumes `self` and generates a set of `ResolvedLink`s that represent the links
+    /// that should be generated, with the targets are all prefixed with `target_prefix`.
+    pub fn emplace(self, target_prefix: PathBuf) -> Vec<ResolvedLink> {
         self.sources
             .into_iter()
             .map(|source| {
@@ -28,7 +31,7 @@ impl Module {
             })
             .flatten()
             .flat_map(|(source, source_stripped)| {
-                let mut resolved_target = target_path.clone();
+                let mut resolved_target = target_prefix.clone();
                 resolved_target.push(source_stripped);
                 ResolvedLink::new(source, resolved_target)
             })
@@ -37,13 +40,13 @@ impl Module {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum TraversalDirective<'a> {
+enum TraversalDirective<'a> {
     LinkThis(&'a PathBuf),
     LinkThese(&'a PathBuf),
 }
 
 #[derive(Clone, Debug)]
-pub enum TraversalStrategy {
+enum TraversalStrategy {
     LinkThis(PathBuf),
     LinkThese(Vec<PathBuf>),
     Recurse(Vec<PathBuf>),
@@ -52,14 +55,14 @@ pub enum TraversalStrategy {
 
 impl TraversalStrategy {
     /// Consumes the given path and returns the traversal strategy associated with it.
-    pub fn try_determine(
+    fn try_determine(
         path: PathBuf,
         directives: &[TraversalDirective],
         ignore_filenames: &[&str],
     ) -> anyhow::Result<Self> {
         // If the path doesn't exists or is it unreachable, return `None`.
         if !path.try_exists().is_ok_and(|exists| exists) {
-            bail!("unreachable path {:?}", path);
+            anyhow::bail!("unreachable path {:?}", path);
         }
         if ignore_filenames.contains(
             &path
@@ -117,12 +120,11 @@ impl<'a> ModuleParser<'a> {
         let source = &self.module_config.source;
         println!("* parsing module {:?}", source);
         if !source.is_dir() {
-            bail!(
+            anyhow::bail!(
                 "module path {:?} is not a directory",
                 self.module_config.source
             );
         }
-        // Read the directives from all the files under the module source root.
         let all_files = WalkDir::new(source)
             .into_iter()
             .flatten()
@@ -132,6 +134,7 @@ impl<'a> ModuleParser<'a> {
                 Some((parent_path, file_path))
             })
             .collect_vec();
+        // Read the directives from all the files under the module source root.
         let mut directives = all_files
             .iter()
             .flat_map(|(parent, file)| {
@@ -145,7 +148,7 @@ impl<'a> ModuleParser<'a> {
                 }
             })
             .collect_vec();
-        // Read directives from the configuration.
+        // Extend the directives with the ones from the configuration.
         directives.extend(
             self.module_config
                 .linkthis
@@ -158,13 +161,14 @@ impl<'a> ModuleParser<'a> {
                 .iter()
                 .map(|p| TraversalDirective::LinkThese(p)),
         );
-        println!("collected directives {:?}", directives);
+        // In order to get all the paths that are exposed by this module, perform a breadth-first
+        // traversal in the filesystem, rooted at the module folder.
         let mut collected_paths = vec![];
         let mut frontier = vec![source.clone()];
         while frontier.len() > 0 {
             let curr_path = frontier.pop().expect("could not pop from the frontier");
             match TraversalStrategy::try_determine(
-                curr_path,
+                curr_path.clone(),
                 &directives,
                 &utils::ignore_filenames(self.global_config),
             ) {
@@ -186,7 +190,10 @@ impl<'a> ModuleParser<'a> {
                     }
                 },
                 Err(err) => {
-                    println!("skipping due to error: {:?}", err)
+                    println!(
+                        "! skipping traversing {:?} due to error: {:?}",
+                        curr_path, err
+                    )
                 }
             }
         }

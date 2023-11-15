@@ -9,6 +9,8 @@ use walkdir::WalkDir;
 use crate::{
     config_parser::{Config, GlobalConfig, ModuleConfig},
     module_parser::ModuleParser,
+    transaction::{FsMod, FsTransaction},
+    utils,
 };
 
 #[derive(Clone, Debug)]
@@ -64,18 +66,15 @@ impl<'a> VirtualSystemBuilder<'a> {
             .zip(self.modules_config.iter())
             .flat_map(|(m, conf)| m.emplace(conf.target.clone()))
             .collect_vec();
-        for link in generated_links.iter() {
-            if verbose {
-                println!("{:?} => {:?}", link.abs_target, link.abs_source);
-            }
-        }
         let effective_build_name = if let Some(build_name) = build_name {
             build_name
         } else {
             format!("{}", rand::thread_rng().gen::<u32>())
         };
+        // Generate the virtual system.
         let build_dir = PathBuf::from("builds").join(&effective_build_name);
-        Self::build_at_root(build_dir.clone(), generated_links, verbose)
+        Self::build_at_root(build_dir.clone(), generated_links)
+            .and_then(|tx| tx.run_atomic(verbose))
             .context("virtual system generation failed, possibly conflicting modules")?;
         // Write the build information
         std::fs::write(
@@ -92,12 +91,9 @@ impl<'a> VirtualSystemBuilder<'a> {
     fn build_at_root<P: Into<PathBuf>>(
         root: P,
         links: Vec<ResolvedLink>,
-        verbose: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<FsTransaction> {
+        let mut tx = FsTransaction::empty();
         let root: PathBuf = root.into();
-        if verbose {
-            println!("* creating a virtual system under {:?}", root);
-        }
         for link in links.into_iter() {
             let mut curr_virt_target = root.clone();
             let relativized_target = if link.abs_target.is_absolute() {
@@ -108,23 +104,17 @@ impl<'a> VirtualSystemBuilder<'a> {
             curr_virt_target.push(relativized_target);
             curr_virt_target = ResolvedLink::expand_path(curr_virt_target)?;
             // Create the virtual directory if it does not exist.
-            curr_virt_target
-                .parent()
-                .context(format!(
-                    "could not get the parent of {:?}",
-                    curr_virt_target
-                ))
-                .and_then(|parent| {
-                    std::fs::create_dir_all(parent)
-                        .context(format!("could not create virtual directory {:?}", parent))
-                })?;
-            // Perform the linkage
-            std::os::unix::fs::symlink(&link.abs_source, &curr_virt_target).context(format!(
-                "could not create the symlink {:?} => {:?}",
-                curr_virt_target, link.abs_source,
+            let curr_virt_target_parent = curr_virt_target.parent().context(format!(
+                "could not get the parent of {:?}",
+                curr_virt_target
             ))?;
+            tx.push(FsMod::CreateDirs(curr_virt_target_parent.to_path_buf()));
+            tx.push(FsMod::Link {
+                original: link.abs_source,
+                target: curr_virt_target,
+            });
         }
-        Ok(())
+        Ok(tx)
     }
 }
 
@@ -142,7 +132,7 @@ impl VirtualSystem {
             build_file_path
         ))?;
         Ok(Self {
-            path: path,
+            path,
             name: build_name,
         })
     }
@@ -158,8 +148,8 @@ impl VirtualSystem {
             .collect_vec()
     }
 
-    pub fn undeploy(self, verbose: bool) -> anyhow::Result<()> {
-        println!("* undeploying the build under {:?}", self.path);
+    pub fn undeploy(self) -> anyhow::Result<FsTransaction> {
+        let mut tx = FsTransaction::empty();
         let leaves = self.get_leaves();
         for leaf in leaves {
             // The target is already encoded in the leaf source.
@@ -168,24 +158,18 @@ impl VirtualSystem {
                     .context("leaf path is malformed")?,
             );
             let abs_target = ResolvedLink::expand_path(target)?;
-            if verbose {
-                println!("remove {:?}", abs_target);
-            }
-            std::fs::remove_dir_all(&abs_target)
-                .context(format!("could not remove {:?}", abs_target))?;
+            tx.push(FsMod::RemoveAll(abs_target));
         }
-        println!("* done =)");
-        Ok(())
+        Ok(tx)
     }
 
     pub fn deploy(
         self,
         hard: bool,
         clear_target: bool,
-        verbose: bool,
         ignore_filenames: &[&str],
-    ) -> anyhow::Result<()> {
-        println!("* deploying the build under {:?}", self.path);
+    ) -> anyhow::Result<FsTransaction> {
+        let mut tx = FsTransaction::empty();
         let leaves = self.get_leaves();
         for leaf in leaves {
             // The target is already encoded in the leaf source.
@@ -200,72 +184,30 @@ impl VirtualSystem {
                 _ = std::fs::remove_file(&abs_target);
             }
             // Create the directories leading to the target.
-            abs_target
+            let abs_target_parent = abs_target
                 .parent()
-                .context(format!("could not get the parent of {:?}", abs_target))
-                .and_then(|target_parent| {
-                    std::fs::create_dir_all(target_parent)
-                        .context(format!("could not create the dirs {:?}", abs_target))
-                })?;
+                .context(format!("could not get the parent of {:?}", abs_target))?;
+            tx.push(FsMod::CreateDirs(abs_target_parent.to_path_buf()));
+            // Perform the actual linking.
             if hard {
-                // Traverse through the regular files indicated by the leaf.
-                let inner = WalkDir::new(&abs_source)
-                    .follow_links(true)
-                    .follow_root_links(true)
-                    .into_iter()
-                    .flatten()
-                    .map(|p| p.path().to_path_buf())
-                    // Only consider regular files.
-                    .filter(|p| p.is_file())
-                    // Make sure that the files are not in the ignored filenames list.
-                    .filter(|p| {
-                        p.file_name()
-                            .map(|file_name| file_name.to_string_lossy())
-                            .map(|file_name| !ignore_filenames.contains(&file_name.as_ref()))
-                            .unwrap_or(false)
-                    });
-                for inner_abs_source in inner {
-                    let inner_abs_target =
-                        abs_target.join(inner_abs_source.strip_prefix(&abs_source).unwrap());
-                    // Create the directories leading to the inner target.
-                    inner_abs_target
-                        .parent()
-                        .context(format!("could not get the parent of {:?}", abs_target))
-                        .and_then(|target_parent| {
-                            std::fs::create_dir_all(target_parent)
-                                .context(format!("could not create the dirs {:?}", abs_target))
-                        })?;
-                    if verbose {
-                        println!("copy {:?} to {:?}", inner_abs_source, inner_abs_target);
-                    }
-                    if let Ok(_) = std::fs::metadata(&inner_abs_target) {
-                        anyhow::bail!(
-                            "file at {:?} already exists, use --force to clear the target paths",
-                            inner_abs_target
-                        );
-                    }
-                    std::fs::copy(&inner_abs_source, &inner_abs_target).context(format!(
-                        "could not copy {:?} to {:?}",
-                        inner_abs_source, inner_abs_target
-                    ))?;
-                }
+                tx.append(utils::copy_recursively(
+                    &abs_source,
+                    &abs_target,
+                    ignore_filenames,
+                )?);
             } else {
-                // Get the original source in the module directory.
+                // Get the original source, pointing to the regular file in the module directory.
                 let abs_source_canon = abs_source.canonicalize().context(format!(
                     "could not canonicalize the source {:?}",
                     abs_source
                 ))?;
-                if verbose {
-                    println!("link {:?} to {:?}", abs_target, abs_source_canon);
-                }
                 // Create the symlink.
-                std::os::unix::fs::symlink(&abs_source_canon, &abs_target).context(format!(
-                "could not create the symlink {:?} to {:?}, use --force to clear the target paths",
-                abs_target, abs_source_canon,
-            ))?;
+                tx.push(FsMod::Link {
+                    original: abs_source_canon,
+                    target: abs_target,
+                });
             }
         }
-        println!("* done =)");
-        Ok(())
+        Ok(tx)
     }
 }
