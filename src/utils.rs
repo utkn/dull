@@ -49,42 +49,56 @@ pub fn set_state<P: Into<PathBuf>>(
         .context(format!("could not set the state file {:?}", state_file))
 }
 
-pub fn copy_recursively(
-    source: &PathBuf,
-    target: &PathBuf,
-    ignore_filenames: &[&str],
-) -> anyhow::Result<FsTransaction> {
-    let mut tx = FsTransaction::empty();
-    // Traverse through the regular files indicated by the leaf.
-    let inner = WalkDir::new(source)
-        .follow_links(true)
-        .follow_root_links(true)
+pub fn copy_file_or_symlink(source: &PathBuf, target: &PathBuf) -> anyhow::Result<()> {
+    if std::fs::metadata(target).is_ok() {
+        anyhow::bail!("target {:?} exists", target);
+    }
+    if source.is_symlink() {
+        let canon_source = source
+            .canonicalize()
+            .context(format!("could not canonicalize {:?}", source))?;
+        std::os::unix::fs::symlink(&canon_source, target).context(format!(
+            "could not create the link {:?} to {:?}",
+            target, canon_source
+        ))?;
+    } else {
+        std::fs::copy(source, target)
+            .context(format!("could not copy file {:?} to {:?}", source, target))?;
+    }
+    Ok(())
+}
+
+pub fn remove_dir_tx(target: &PathBuf) -> anyhow::Result<FsTransaction> {
+    let mut rm_files_tx = FsTransaction::empty();
+    let mut rm_dirs_tx = FsTransaction::empty();
+    if !target.is_dir() {
+        anyhow::bail!("target {:?} is not a directory", target)
+    }
+    let target_files = WalkDir::new(target)
+        .follow_root_links(false)
+        .follow_links(false)
         .into_iter()
         .flatten()
         .map(|p| p.path().to_path_buf())
-        // Only consider regular files.
-        .filter(|p| p.is_file())
-        // Make sure that the files are not in the ignored filenames list.
-        .filter(|p| {
-            p.file_name()
-                .map(|file_name| file_name.to_string_lossy())
-                .map(|file_name| !ignore_filenames.contains(&file_name.as_ref()))
-                .unwrap_or(false)
-        });
-    for inner_source in inner {
-        let inner_target = target.join(inner_source.strip_prefix(&source).unwrap());
-        if let Ok(_) = std::fs::metadata(&inner_target) {
-            anyhow::bail!("file at {:?} already exists", inner_target);
-        }
+        // Only consider symlinks or regular files.
+        .filter(|p| p.is_symlink() || p.is_file());
+    for inner_target in target_files {
         // Create the directories leading to the inner target.
-        let target_parent = inner_target
+        let inner_target_parent = inner_target
             .parent()
             .context(format!("could not get the parent of {:?}", inner_target))?;
-        tx.push(FsMod::CreateDirs(target_parent.to_path_buf()));
-        tx.push(FsMod::CopyFile {
-            source: inner_source,
-            target: inner_target,
-        });
+        rm_files_tx.push(FsMod::RemoveFile(inner_target.clone()));
+        let rm_parent_mod = FsMod::RemoveDir(inner_target_parent.to_path_buf());
+        if !rm_dirs_tx.mods.contains(&rm_parent_mod) {
+            rm_dirs_tx.push(rm_parent_mod);
+        }
     }
-    Ok(tx)
+    rm_dirs_tx.mods.sort_by_key(|tx| match tx {
+        FsMod::RemoveDir(path) => path.components().count(),
+        _ => unreachable!(),
+    });
+    rm_dirs_tx.mods.reverse();
+    rm_dirs_tx.mods.push(FsMod::RemoveDir(target.clone()));
+    rm_files_tx.append(rm_dirs_tx);
+    Ok(rm_files_tx)
 }

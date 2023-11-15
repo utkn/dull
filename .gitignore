@@ -1,6 +1,7 @@
 /target
 /modules
 /builds
+/backups
 .dull-build
 .dull-state
 config.toml

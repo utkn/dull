@@ -74,7 +74,8 @@ fn main() -> anyhow::Result<()> {
                 .context(
                     "could not deploy, maybe use --force to clear the target files/directories",
                 )
-                .and_then(|tx| tx.run_atomic(cli.verbose))?;
+                .and_then(|tx| tx.run_atomic(cli.verbose))?
+                .display_report();
         }
         CliCommand::Undeploy => {
             let last_build_path = utils::get_state(".", &config.global)
@@ -83,7 +84,8 @@ fn main() -> anyhow::Result<()> {
             let virt_system = VirtualSystem::read(last_build_path, &config.global.build_file)?;
             virt_system
                 .undeploy()
-                .and_then(|tx| tx.run_atomic(cli.verbose))?;
+                .and_then(|tx| tx.run_atomic(cli.verbose))?
+                .display_report();
         }
         CliCommand::Info => {
             let latest_build = utils::get_state(".", &config.global)
