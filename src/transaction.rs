@@ -115,13 +115,13 @@ impl FsTransactionResult {
                 }
                 Some(Ok(())) => {
                     println!("-------");
-                    println!("Rollback succeeded");
+                    println!("Rollback succeeded.");
                 }
                 _ => (),
             }
             return;
         }
-        println!("Transaction succeeded");
+        println!("Transaction succeeded.");
     }
 }
 
@@ -145,10 +145,16 @@ impl FsTransaction {
         self.mods.extend(other.mods)
     }
 
-    fn rollback_tx(history: Vec<FsMod>, tx_err: Option<anyhow::Error>) -> FsTransactionResult {
+    fn rollback_tx(
+        history: Vec<FsMod>,
+        tx_err: Option<anyhow::Error>,
+        verbose: bool,
+    ) -> FsTransactionResult {
         if let Some(tx_err) = tx_err {
             for m_inv in history.into_iter().rev() {
-                println!("<= {}", m_inv);
+                if verbose {
+                    println!("<= {}", m_inv);
+                }
                 if let Err(rollback_err) = m_inv.apply(None) {
                     println!("✗ rollback error");
                     let ext_rb_err = rollback_err.context("rollback failed");
@@ -170,16 +176,40 @@ impl FsTransaction {
         };
     }
 
-    pub fn run_atomic(self, _verbose: bool) -> anyhow::Result<FsTransactionResult> {
+    pub fn run_haphazard(self, verbose: bool) -> anyhow::Result<FsTransactionResult> {
+        println!("Running haphazard transaction...");
+        for m in self.mods.into_iter() {
+            if verbose {
+                println!("? {}", m);
+            }
+            match m.apply(None) {
+                Err(err) => {
+                    return Ok(FsTransactionResult {
+                        tx_result: Err(err),
+                        rb_result: None,
+                    });
+                }
+                Ok(_) => {}
+            }
+        }
+        return Ok(FsTransactionResult {
+            tx_result: Ok(()),
+            rb_result: None,
+        });
+    }
+
+    pub fn run_atomic(self, verbose: bool) -> anyhow::Result<FsTransactionResult> {
         let tx_id = format!("{}", rand::thread_rng().gen::<u32>());
-        println!("Running transaction {:?}...", tx_id);
+        println!("Running atomic transaction {:?}...", tx_id);
         let tx_backup_dir = PathBuf::from("backups").join(tx_id);
         std::fs::create_dir_all(&tx_backup_dir)
             .context(format!("could not create the backup directory"))?;
         let mut history = vec![];
         let mut tx_err = None;
         for m in self.mods.into_iter() {
-            println!("=> {}", m);
+            if verbose {
+                println!("=> {}", m);
+            }
             match m.apply(Some(&tx_backup_dir)) {
                 Ok(m_inv) => {
                     history.push(m_inv);
@@ -191,7 +221,7 @@ impl FsTransaction {
                 }
             }
         }
-        let tx_result = Self::rollback_tx(history, tx_err);
+        let tx_result = Self::rollback_tx(history, tx_err, verbose);
         // Remove the backups only if a fatal failure has not occurred.
         if tx_result.fatal_failure() {
             println!(

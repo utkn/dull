@@ -74,8 +74,8 @@ impl<'a> VirtualSystemBuilder<'a> {
         // Generate the virtual system.
         let build_dir = PathBuf::from("builds").join(&effective_build_name);
         Self::build_at_root(build_dir.clone(), generated_links)
-            .and_then(|tx| tx.run_atomic(verbose))?
-            .display_report();
+            .and_then(|tx| tx.run_haphazard(verbose))?
+            .tx_result?;
         // Write the build information
         std::fs::write(
             build_dir.join(&self.global_config.build_file),
