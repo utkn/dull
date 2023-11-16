@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 use crate::{
     config_parser::{Config, GlobalConfig, ModuleConfig},
     module_parser::ModuleParser,
-    transaction::{tx_gen, FsPrimitive, FsTransaction, FsTransactionResult},
+    transaction::{tx_gen, FsPrimitive, FsTransaction},
 };
 
 #[derive(Clone, Debug)]
@@ -72,15 +72,16 @@ impl<'a> VirtualSystemBuilder<'a> {
         };
         // Generate the virtual system.
         let build_dir = PathBuf::from("builds").join(&effective_build_name);
-        Self::build_at_root(build_dir.clone(), generated_links)
-            .and_then(|tx| tx.with_name("build").run_haphazard(verbose))?
+        Self::build_at_root(build_dir.clone(), generated_links)?
+            .with_name("build")
+            .run_haphazard(verbose)
             .as_tx_result()?;
         // Write the build information
-        std::fs::write(
-            build_dir.join(&self.global_config.build_file),
-            format!("{}", effective_build_name),
-        )
-        .context("could not generate the build information")?;
+        let build_info_path = build_dir.join(&self.global_config.build_file);
+        std::fs::write(&build_info_path, format!("{}", effective_build_name)).context(format!(
+            "could not generate the build information at {:?}",
+            build_info_path
+        ))?;
         Ok(build_dir)
     }
 
@@ -126,6 +127,55 @@ pub struct VirtualSystem<T> {
     pub pd: PhantomData<T>,
 }
 
+impl<T> VirtualSystem<T> {
+    /// From a leaf node, extracts and returns the absolute source and target paths.
+    fn parse_leaf(&self, leaf: &PathBuf) -> anyhow::Result<(PathBuf, PathBuf)> {
+        // The target is already encoded in the leaf source.
+        let target = PathBuf::from("/").join(
+            leaf.strip_prefix(&self.path)
+                .context("leaf path is malformed")?,
+        );
+        let abs_target = ResolvedLink::expand_path(&target)?;
+        let abs_source = ResolvedLink::expand_path(leaf)?;
+        // Get the original source, pointing to the regular file in the module directory.
+        let abs_source_canon = abs_source.canonicalize().context(format!(
+            "could not canonicalize the source {:?}",
+            abs_source
+        ))?;
+        Ok((abs_source_canon, abs_target))
+    }
+
+    /// Returns the leaves of the virtual system.
+    fn get_leaves(&self) -> Vec<PathBuf> {
+        WalkDir::new(&self.path)
+            .follow_links(false)
+            .follow_root_links(false)
+            .into_iter()
+            .flatten()
+            .map(|p| p.path().to_path_buf())
+            .filter(|p| p.is_symlink())
+            .collect_vec()
+    }
+
+    pub fn undeploy(self, verbose: bool) -> anyhow::Result<()> {
+        let mut tx = FsTransaction::empty();
+        let leaves = self.get_leaves();
+        for leaf in leaves {
+            // The target is already encoded in the leaf source.
+            let target = PathBuf::from("/").join(
+                leaf.strip_prefix(&self.path)
+                    .context("leaf path is malformed")?,
+            );
+            let abs_target = ResolvedLink::expand_path(&target)?;
+            tx.append(tx_gen::remove_any(&abs_target)?);
+        }
+        let res = tx.with_name("undeploy").run_atomic(verbose)?;
+        res.display_report();
+        res.as_tx_result()?;
+        Ok(())
+    }
+}
+
 impl VirtualSystem<Undeployable> {
     /// Reads the virtual system at the given path.
     pub fn read(path: PathBuf, build_file_name: &str) -> anyhow::Result<Self> {
@@ -161,9 +211,9 @@ impl VirtualSystem<Undeployable> {
                 .context(format!("could not get the parent of {:?}", abs_target))?;
             tx.push(FsPrimitive::TryCreateDirs(abs_target_parent.to_path_buf()));
         }
-        let deployment_result = tx.with_name("prepare").run_atomic(verbose)?;
-        deployment_result.display_report();
-        deployment_result.as_tx_result()?;
+        let res = tx.with_name("prepare").run_atomic(verbose)?;
+        res.display_report();
+        res.as_tx_result()?;
         Ok(VirtualSystem {
             name: self.name,
             path: self.path,
@@ -172,54 +222,8 @@ impl VirtualSystem<Undeployable> {
     }
 }
 
-impl<T> VirtualSystem<T> {
-    /// From a leaf node, extracts and returns the absolute source and target paths.
-    fn parse_leaf(&self, leaf: &PathBuf) -> anyhow::Result<(PathBuf, PathBuf)> {
-        // The target is already encoded in the leaf source.
-        let target = PathBuf::from("/").join(
-            leaf.strip_prefix(&self.path)
-                .context("leaf path is malformed")?,
-        );
-        let abs_target = ResolvedLink::expand_path(&target)?;
-        let abs_source = ResolvedLink::expand_path(leaf)?;
-        // Get the original source, pointing to the regular file in the module directory.
-        let abs_source_canon = abs_source.canonicalize().context(format!(
-            "could not canonicalize the source {:?}",
-            abs_source
-        ))?;
-        Ok((abs_source_canon, abs_target))
-    }
-
-    /// Returns the leaves of the virtual system.
-    fn get_leaves(&self) -> Vec<PathBuf> {
-        WalkDir::new(&self.path)
-            .follow_links(false)
-            .follow_root_links(false)
-            .into_iter()
-            .flatten()
-            .map(|p| p.path().to_path_buf())
-            .filter(|p| p.is_symlink())
-            .collect_vec()
-    }
-
-    pub fn undeploy(self, verbose: bool) -> anyhow::Result<FsTransactionResult> {
-        let mut tx = FsTransaction::empty();
-        let leaves = self.get_leaves();
-        for leaf in leaves {
-            // The target is already encoded in the leaf source.
-            let target = PathBuf::from("/").join(
-                leaf.strip_prefix(&self.path)
-                    .context("leaf path is malformed")?,
-            );
-            let abs_target = ResolvedLink::expand_path(&target)?;
-            tx.append(tx_gen::remove_any(&abs_target)?);
-        }
-        tx.with_name("undeploy").run_atomic(verbose)
-    }
-}
-
 impl VirtualSystem<Deployable> {
-    pub fn soft_deploy(self, verbose: bool) -> anyhow::Result<FsTransactionResult> {
+    pub fn soft_deploy(self, verbose: bool) -> anyhow::Result<()> {
         let mut tx = FsTransaction::empty();
         let leaves = self.get_leaves();
         for leaf in leaves {
@@ -231,14 +235,13 @@ impl VirtualSystem<Deployable> {
                 target,
             });
         }
-        tx.with_name("soft deploy").run_atomic(verbose)
+        let res = tx.with_name("soft deploy").run_atomic(verbose)?;
+        res.display_report();
+        res.as_tx_result()?;
+        Ok(())
     }
 
-    pub fn hard_deploy(
-        self,
-        ignore_filenames: &[&str],
-        verbose: bool,
-    ) -> anyhow::Result<FsTransactionResult> {
+    pub fn hard_deploy(self, ignore_filenames: &[&str], verbose: bool) -> anyhow::Result<()> {
         let mut tx = FsTransaction::empty();
         let leaves = self.get_leaves();
         for leaf in leaves {
@@ -281,6 +284,9 @@ impl VirtualSystem<Deployable> {
                 });
             }
         }
-        tx.with_name("hard deploy").run_atomic(verbose)
+        let res = tx.with_name("hard deploy").run_atomic(verbose)?;
+        res.display_report();
+        res.as_tx_result()?;
+        Ok(())
     }
 }

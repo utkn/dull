@@ -19,8 +19,8 @@ pub fn read_config<P: Into<PathBuf>>(p: P) -> Config {
             ))
         })
         .map_err(|err| {
-            println!("{:?}", err);
-            println!("fallback to default config");
+            println!("Error: {:?}", err);
+            println!("Falling back to default config");
             ()
         })
         .unwrap_or_default();

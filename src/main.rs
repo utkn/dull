@@ -61,7 +61,10 @@ fn main() -> anyhow::Result<()> {
     let config = utils::read_config(cli.config);
     match cli.command {
         CliCommand::Build { name } => {
-            let build_path = VirtualSystemBuilder::from_config(&config).build(name, cli.verbose)?;
+            println!("Building...");
+            let build_path = VirtualSystemBuilder::from_config(&config)
+                .build(name, cli.verbose)
+                .context("build failed")?;
             utils::set_state(
                 ".",
                 &config.global,
@@ -84,26 +87,27 @@ fn main() -> anyhow::Result<()> {
                     ))?
                     .into()
             };
+            println!("Preparing...");
             let virt_system = VirtualSystem::read(effective_build_path, &config.global.build_file)?
                 .prepare_deployment(force, cli.verbose)
-                .context("could not prepare for deployment")?;
-            let res = if hard {
+                .context("preparation failed")?;
+            println!("Deploying...");
+            let deployment_result = if hard {
                 virt_system.hard_deploy(&ignore_filenames, cli.verbose)
             } else {
                 virt_system.soft_deploy(cli.verbose)
-            }
-            .context("deployment failed")?;
-            res.display_report();
+            };
+            deployment_result.context("deployment failed")?;
         }
         CliCommand::Undeploy => {
+            println!("Undeploying...");
             let last_build_path = utils::get_state(".", &config.global)
                 .context("no build was deployed, cannot undeploy")?
                 .into();
             let virt_system = VirtualSystem::read(last_build_path, &config.global.build_file)?;
             virt_system
                 .undeploy(cli.verbose)
-                .context("undeployment failed")?
-                .display_report();
+                .context("undeployment failed")?;
         }
         CliCommand::Info => {
             let latest_build = utils::get_state(".", &config.global)
