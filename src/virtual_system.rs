@@ -82,7 +82,6 @@ impl<'a> VirtualSystemBuilder<'a> {
         // Generate the virtual system.
         let build_dir = PathBuf::from("builds").join(&effective_build_name);
         Self::build_at_root(build_dir.clone(), generated_links)?
-            .with_name("build")
             .run_haphazard(verbose)
             .context("build at root failed")?;
         // Write the build information
@@ -98,7 +97,7 @@ impl<'a> VirtualSystemBuilder<'a> {
         root: P,
         links: Vec<ResolvedLink>,
     ) -> anyhow::Result<FsTransaction> {
-        let mut tx = FsTransaction::empty();
+        let mut tx = FsTransaction::empty("build");
         let root: PathBuf = root.into();
         for link in links.into_iter() {
             let mut curr_virt_target = root.clone();
@@ -162,7 +161,7 @@ impl<T> VirtualSystem<T> {
     }
 
     pub fn undeploy(self, tx_proc: &mut TxProcessor) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty().with_name("undeploy");
+        let mut tx = FsTransaction::empty("undeploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             // The target is already encoded in the leaf source.
@@ -194,11 +193,11 @@ impl VirtualSystem<Undeployable> {
 
     /// Clears the target files/folders in the actual filesystem.
     pub fn clear_targets(self, tx_proc: &mut TxProcessor) -> anyhow::Result<Self> {
-        let mut tx = FsTransaction::empty().with_name("clear targets");
+        let mut tx = FsTransaction::empty("clear targets");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (_, abs_target) = self.parse_leaf(&leaf)?;
-            // Clear the target if it exists.
+            // Clear the target iff it exists.
             if abs_target.symlink_metadata().is_ok() {
                 tx.append(tx_gen::remove_any(&abs_target)?);
             }
@@ -213,7 +212,7 @@ impl VirtualSystem<Undeployable> {
         self,
         tx_proc: &mut TxProcessor,
     ) -> anyhow::Result<VirtualSystem<Deployable>> {
-        let mut tx = FsTransaction::empty().with_name("prepare");
+        let mut tx = FsTransaction::empty("prepare");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (_, abs_target) = self.parse_leaf(&leaf)?;
@@ -221,9 +220,7 @@ impl VirtualSystem<Undeployable> {
             let abs_target_parent = abs_target
                 .parent()
                 .context(format!("could not get the parent of {:?}", abs_target))?;
-            if !tx.has_dir(abs_target_parent) {
-                tx.try_create_dirs(abs_target_parent);
-            }
+            tx.try_create_dirs(abs_target_parent);
         }
         tx_proc.run_required(tx)?;
         Ok(VirtualSystem {
@@ -236,7 +233,7 @@ impl VirtualSystem<Undeployable> {
 
 impl VirtualSystem<Deployable> {
     pub fn soft_deploy(self, tx_proc: &mut TxProcessor) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty().with_name("soft deploy");
+        let mut tx = FsTransaction::empty("soft deploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (source, target) = self
@@ -252,7 +249,7 @@ impl VirtualSystem<Deployable> {
         ignore_filenames: &[&str],
         tx_proc: &mut TxProcessor,
     ) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty().with_name("hard deploy");
+        let mut tx = FsTransaction::empty("hard deploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (source, target) = self
@@ -273,7 +270,9 @@ impl VirtualSystem<Deployable> {
                         .map(|file_name| file_name.to_string_lossy())
                         .map(|file_name| !ignore_filenames.contains(&file_name.as_ref()))
                         .unwrap_or(false)
-                });
+                })
+                // Always start from the shortest path (stable sort is important)
+                .sorted_by_key(|p| p.components().count());
             for inner_source in inner {
                 let inner_target = if inner_source == source {
                     target.clone()
@@ -284,9 +283,7 @@ impl VirtualSystem<Deployable> {
                 let inner_target_parent = inner_target
                     .parent()
                     .context(format!("could not get the parent of {:?}", inner_target))?;
-                if !tx.has_dir(inner_target_parent) {
-                    tx.try_create_dirs(inner_target_parent);
-                }
+                tx.try_create_dirs(inner_target_parent);
                 tx.copy_file(inner_source, inner_target);
             }
         }

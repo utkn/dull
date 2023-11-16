@@ -26,26 +26,24 @@ fn run_sequentially(
 impl FsTransaction {
     /// Interprets the transaction as a list of primitives and applies them sequentially until an error occurs.
     pub fn run_haphazard(self, verbose: bool) -> anyhow::Result<()> {
-        println!(
-            "Running filesystem modifications ({})",
-            self.name.unwrap_or(String::from("nameless"))
-        );
-        run_sequentially(
+        println!("Running filesystem modifications ({})", self.name);
+        if let Err(err) = run_sequentially(
             self.mods,
             None,
             None,
             if verbose { Some(".") } else { None },
-        )?;
-        println!(" ✓ Execution succeeded");
-        return Ok(());
+        ) {
+            println!(" ✗ Execution failed");
+            Err(err)
+        } else {
+            println!(" ✓ Execution succeeded");
+            Ok(())
+        }
     }
 
     /// Runs the transaction in an atomic manner. This means if an error occurs, we try to rollback.
     pub fn run_atomic(self, verbose: bool) -> anyhow::Result<TxResult> {
-        println!(
-            "Running transaction ({})",
-            self.name.as_ref().unwrap_or(&String::from("nameless")),
-        );
+        println!("Running transaction ({})", self.name,);
         // Create a random transaction id.
         let tx_id = format!("{}", rand::thread_rng().gen::<u32>());
         // Create a backup directory for the transaction.
@@ -63,23 +61,23 @@ impl FsTransaction {
                 Some(&tx_backup_dir),
                 if verbose { Some("→") } else { None },
             ) {
-                println!(" ✗ Transaction error, trying to roll back");
+                println!(" ✗ Transaction failed, trying to roll back");
                 inv_mods.reverse();
                 // Run the history (inverted) to rollback.
                 if let Err(rb_err) =
                     run_sequentially(inv_mods, None, None, if verbose { Some("←") } else { None })
                 {
-                    println!(" ✗ Rollback failed");
+                    println!(" ✗ Transaction rollback failed");
                     TxResult::rb_fail(tx_err, rb_err)
                 } else {
-                    println!(" ✓ Rollback succeeded");
+                    println!(" ✓ Transaction rollback succeeded");
                     TxResult::rb_success(tx_err)
                 }
             } else {
                 println!(" ✓ Transaction succeeded");
                 inv_mods.reverse();
                 TxResult::success(FsTransaction {
-                    name: self.name.map(|old_name| format!("undo {}", old_name)),
+                    name: format!("undo {}", self.name),
                     mods: inv_mods,
                 })
             }

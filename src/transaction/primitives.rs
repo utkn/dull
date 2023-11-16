@@ -10,8 +10,8 @@ pub(super) enum FsPrimitive {
     Link { original: PathBuf, target: PathBuf },
     CopyFile { source: PathBuf, target: PathBuf },
     RemoveFile(PathBuf),
-    RemoveDir(PathBuf),
-    TryCreateDirs(PathBuf),
+    RemoveEmptyDir(PathBuf),
+    CreateDirs(PathBuf),
     Nop,
 }
 
@@ -31,11 +31,11 @@ impl std::fmt::Display for FsPrimitive {
             FsPrimitive::RemoveFile(path) => {
                 f.write_fmt(format_args!("RemoveFile {}", path.display()))
             }
-            FsPrimitive::RemoveDir(path) => {
+            FsPrimitive::RemoveEmptyDir(path) => {
                 f.write_fmt(format_args!("RemoveDir {}", path.display()))
             }
-            FsPrimitive::TryCreateDirs(path) => {
-                f.write_fmt(format_args!("TryCreateDirs {}", path.display()))
+            FsPrimitive::CreateDirs(path) => {
+                f.write_fmt(format_args!("CreateDirs {}", path.display()))
             }
             FsPrimitive::Nop => f.write_fmt(format_args!("Nop")),
         }
@@ -77,14 +77,13 @@ impl FsPrimitive {
                 std::fs::remove_file(&path).context("could not remove file {:?}")?;
                 Ok(undo_mod)
             }
-            FsPrimitive::RemoveDir(path) => {
+            FsPrimitive::RemoveEmptyDir(path) => {
                 std::fs::remove_dir(&path).context(format!("could not remove dir {:?}", path))?;
-                Ok(Self::TryCreateDirs(path))
+                Ok(Self::CreateDirs(path))
             }
-            FsPrimitive::TryCreateDirs(path) => {
-                // No need to create a directory if it already exists.
+            FsPrimitive::CreateDirs(path) => {
                 if path.symlink_metadata().is_ok() {
-                    return Ok(FsPrimitive::Nop);
+                    anyhow::bail!("directory target is not empty {:?}", path);
                 }
                 let first_created_dir = path.ancestors().find(|ancestor| {
                     let exists_or_unreachable = ancestor.try_exists().unwrap_or(true);
@@ -92,7 +91,7 @@ impl FsPrimitive {
                 });
                 std::fs::create_dir_all(&path).context(format!("could not create {:?}", path))?;
                 if let Some(first_created_dir) = first_created_dir {
-                    Ok(Self::RemoveDir(first_created_dir.to_path_buf()))
+                    Ok(Self::RemoveEmptyDir(first_created_dir.to_path_buf()))
                 } else {
                     Ok(FsPrimitive::Nop)
                 }

@@ -13,25 +13,20 @@ pub use tx_result::*;
 
 #[derive(Clone, Debug)]
 pub struct FsTransaction {
-    name: Option<String>,
+    name: String,
     mods: Vec<FsPrimitive>,
 }
 
 impl FsTransaction {
-    pub fn empty() -> Self {
+    pub fn empty<S: Into<String>>(name: S) -> Self {
         Self {
-            name: None,
+            name: name.into(),
             mods: Default::default(),
         }
     }
 
     pub fn append(&mut self, other: FsTransaction) {
         self.mods.extend(other.mods)
-    }
-
-    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.name = Some(name.into());
-        self
     }
 }
 
@@ -62,48 +57,95 @@ impl FsTransaction {
         self.mods.push(FsPrimitive::RemoveFile(target.into()))
     }
 
-    pub fn remove_dir<P: Into<PathBuf>>(&mut self, target: P) {
-        self.mods.push(FsPrimitive::RemoveDir(target.into()))
+    pub fn remove_empty_dir<P: Into<PathBuf>>(&mut self, target: P) {
+        self.mods.push(FsPrimitive::RemoveEmptyDir(target.into()))
     }
 
-    pub fn try_create_dirs<P: Into<PathBuf>>(&mut self, path: P) {
-        self.mods.push(FsPrimitive::TryCreateDirs(path.into()));
+    pub fn create_dirs<P: Into<PathBuf>>(&mut self, target: P) {
+        self.mods.push(FsPrimitive::CreateDirs(target.into()));
     }
 
-    /// Returns true if this transaction creates the given directory `path`.
-    pub fn has_dir<P: Into<PathBuf>>(&self, path: P) -> bool {
-        let mut created_dirs = HashSet::new();
-        for m in &self.mods {
-            match m {
-                FsPrimitive::RemoveDir(p) => {
-                    created_dirs.remove(p);
-                }
-                FsPrimitive::TryCreateDirs(p) => {
-                    created_dirs.insert(p);
-                }
-                _ => {}
-            }
+    pub fn try_create_dirs<P: Into<PathBuf>>(&mut self, target: P) {
+        let path = target.into();
+        if path.try_exists().unwrap_or(true) || self.summarize().creates_dirs(&path) {
+            return;
         }
-        created_dirs.contains(&path.into())
+        self.mods.push(FsPrimitive::CreateDirs(path));
     }
 
-    /// Returns true if this transaction creates the given file or symlink `path`.
-    pub fn has_file<P: Into<PathBuf>>(&self, path: P) -> bool {
-        let mut created_files = HashSet::new();
-        for m in &self.mods {
+    pub fn summarize(&self) -> TxSummary {
+        TxSummary::from(self)
+    }
+}
+
+pub struct TxSummary {
+    files_to_create: HashSet<PathBuf>,
+    files_to_remove: HashSet<PathBuf>,
+    dirs_to_create: HashSet<PathBuf>,
+    dirs_to_remove: HashSet<PathBuf>,
+}
+
+impl From<&FsTransaction> for TxSummary {
+    fn from(tx: &FsTransaction) -> Self {
+        let mut files_to_create = HashSet::new();
+        let mut files_to_remove = HashSet::new();
+        let mut dirs_to_create = HashSet::new();
+        let mut dirs_to_remove = HashSet::new();
+        for m in &tx.mods {
             match m {
                 FsPrimitive::RemoveFile(p) => {
-                    created_files.remove(p);
+                    files_to_remove.insert(p.to_path_buf());
+                    files_to_create.remove(p);
                 }
                 FsPrimitive::CopyFile { target: p, .. } => {
-                    created_files.insert(p);
+                    files_to_create.insert(p.to_path_buf());
+                    files_to_remove.remove(p);
                 }
                 FsPrimitive::Link { target: p, .. } => {
-                    created_files.insert(p);
+                    files_to_create.insert(p.to_path_buf());
+                    files_to_remove.remove(p);
                 }
-                _ => {}
+                FsPrimitive::RemoveEmptyDir(p) => {
+                    dirs_to_remove.insert(p.to_path_buf());
+                    // TODO: raise an error if there exists a `TryCreateDirs` command
+                    // with `p` is a strict prefix.
+                    dirs_to_create.remove(p);
+                }
+                FsPrimitive::CreateDirs(p) => {
+                    dirs_to_create.insert(p.to_path_buf());
+                    // The directories that were removed previously that are prefixes of `p`
+                    // are recreated.
+                    dirs_to_remove = dirs_to_remove
+                        .drain()
+                        .filter(|rm_dir| !p.starts_with(rm_dir))
+                        .collect();
+                }
+                FsPrimitive::Nop => {}
             }
         }
-        created_files.contains(&path.into())
+        Self {
+            files_to_create,
+            files_to_remove,
+            dirs_to_create,
+            dirs_to_remove,
+        }
+    }
+}
+
+impl TxSummary {
+    pub fn creates_file(&self, p: &PathBuf) -> bool {
+        self.files_to_create.contains(p)
+    }
+
+    pub fn removes_file(&self, p: &PathBuf) -> bool {
+        self.files_to_remove.contains(p)
+    }
+
+    pub fn creates_dirs(&self, p: &PathBuf) -> bool {
+        self.dirs_to_create.contains(p)
+    }
+
+    pub fn removes_empty_dir(&self, p: &PathBuf) -> bool {
+        self.dirs_to_remove.contains(p)
     }
 }
