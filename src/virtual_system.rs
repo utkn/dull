@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 use crate::{
     config_parser::{Config, GlobalConfig, ModuleConfig},
     module_parser::ModuleParser,
-    transaction::{tx_gen, FsTransaction, FsTransactionResult},
+    transaction::{tx_gen, FsTransaction, TxProcessor},
 };
 
 #[derive(Clone, Debug)]
@@ -84,7 +84,7 @@ impl<'a> VirtualSystemBuilder<'a> {
         Self::build_at_root(build_dir.clone(), generated_links)?
             .with_name("build")
             .run_haphazard(verbose)
-            .as_tx_result()?;
+            .context("build at root failed")?;
         // Write the build information
         let build_info_path = build_dir.join(&self.global_config.build_file);
         std::fs::write(&build_info_path, format!("{}", effective_build_name)).context(format!(
@@ -161,8 +161,8 @@ impl<T> VirtualSystem<T> {
             .collect_vec()
     }
 
-    pub fn undeploy(self, verbose: bool) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty();
+    pub fn undeploy(self, tx_proc: &mut TxProcessor) -> anyhow::Result<()> {
+        let mut tx = FsTransaction::empty().with_name("undeploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             // The target is already encoded in the leaf source.
@@ -173,10 +173,7 @@ impl<T> VirtualSystem<T> {
             let abs_target = ResolvedLink::expand_path(&target)?;
             tx.append(tx_gen::remove_any(&abs_target)?);
         }
-        let res = tx.with_name("undeploy").run_atomic(verbose)?;
-        res.display_report();
-        res.as_tx_result()?;
-        Ok(())
+        tx_proc.run_required(tx)
     }
 }
 
@@ -195,29 +192,40 @@ impl VirtualSystem<Undeployable> {
         })
     }
 
+    /// Clears the target files/folders in the actual filesystem.
+    pub fn clear_targets(self, tx_proc: &mut TxProcessor) -> anyhow::Result<Self> {
+        let mut tx = FsTransaction::empty().with_name("clear targets");
+        let leaves = self.get_leaves();
+        for leaf in leaves {
+            let (_, abs_target) = self.parse_leaf(&leaf)?;
+            // Clear the target if it exists.
+            if abs_target.symlink_metadata().is_ok() {
+                tx.append(tx_gen::remove_any(&abs_target)?);
+            }
+        }
+        tx_proc.run_required(tx)?;
+        Ok(self)
+    }
+
     /// Prepares the virtual system for deployment to the actual system.
+    /// Returns a deployable system.
     pub fn prepare_deployment(
         self,
-        clear_target: bool,
-        verbose: bool,
+        tx_proc: &mut TxProcessor,
     ) -> anyhow::Result<VirtualSystem<Deployable>> {
         let mut tx = FsTransaction::empty().with_name("prepare");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (_, abs_target) = self.parse_leaf(&leaf)?;
-            // Clear the target.
-            if clear_target && abs_target.symlink_metadata().is_ok() {
-                tx.append(tx_gen::remove_any(&abs_target)?);
-            }
             // Create the directories leading to the target.
             let abs_target_parent = abs_target
                 .parent()
                 .context(format!("could not get the parent of {:?}", abs_target))?;
-            tx.try_create_dirs(abs_target_parent);
+            if !tx.has_dir(abs_target_parent) {
+                tx.try_create_dirs(abs_target_parent);
+            }
         }
-        let deployment_result = tx.run_atomic(verbose)?;
-        deployment_result.display_report();
-        deployment_result.as_tx_result()?;
+        tx_proc.run_required(tx)?;
         Ok(VirtualSystem {
             name: self.name,
             path: self.path,
@@ -227,8 +235,8 @@ impl VirtualSystem<Undeployable> {
 }
 
 impl VirtualSystem<Deployable> {
-    pub fn soft_deploy(self, verbose: bool) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty();
+    pub fn soft_deploy(self, tx_proc: &mut TxProcessor) -> anyhow::Result<()> {
+        let mut tx = FsTransaction::empty().with_name("soft deploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (source, target) = self
@@ -236,14 +244,15 @@ impl VirtualSystem<Deployable> {
                 .context(format!("could not parse the leaf {:?}", leaf))?;
             tx.link(source, target);
         }
-        let res = tx.with_name("soft deploy").run_atomic(verbose)?;
-        res.display_report();
-        res.as_tx_result()?;
-        Ok(())
+        tx_proc.run_required(tx)
     }
 
-    pub fn hard_deploy(self, ignore_filenames: &[&str], verbose: bool) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty();
+    pub fn hard_deploy(
+        self,
+        ignore_filenames: &[&str],
+        tx_proc: &mut TxProcessor,
+    ) -> anyhow::Result<()> {
+        let mut tx = FsTransaction::empty().with_name("hard deploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (source, target) = self
@@ -281,9 +290,6 @@ impl VirtualSystem<Deployable> {
                 tx.copy_file(inner_source, inner_target);
             }
         }
-        let res = tx.with_name("hard deploy").run_atomic(verbose)?;
-        res.display_report();
-        res.as_tx_result()?;
-        Ok(())
+        tx_proc.run_required(tx)
     }
 }

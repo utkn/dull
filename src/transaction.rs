@@ -1,12 +1,14 @@
 mod primitives;
 mod tx_apply;
 pub mod tx_gen;
+mod tx_processor;
 mod tx_result;
 
 use std::{collections::HashSet, path::PathBuf};
 
 use primitives::*;
 pub use tx_apply::*;
+pub use tx_processor::*;
 pub use tx_result::*;
 
 #[derive(Clone, Debug)]

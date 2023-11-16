@@ -1,16 +1,18 @@
 use anyhow::Context;
 
+use super::FsTransaction;
+
 #[derive(Debug)]
-pub struct FsTransactionResult {
-    tx_result: anyhow::Result<()>,
+pub struct TxResult {
+    tx_result: anyhow::Result<FsTransaction>,
     rb_result: Option<anyhow::Result<()>>,
 }
 
-impl FsTransactionResult {
+impl TxResult {
     /// Returns a transaction result that denotes a successful execution.
-    pub fn success() -> Self {
+    pub fn success(tx_inv: FsTransaction) -> Self {
         Self {
-            tx_result: Ok(()),
+            tx_result: Ok(tx_inv),
             rb_result: None,
         }
     }
@@ -41,7 +43,7 @@ impl FsTransactionResult {
 
     /// Returns `true` if the result denotes a successful transaction.
     pub fn is_success(&self) -> bool {
-        matches!(self.tx_result, Ok(()))
+        matches!(self.tx_result, Ok(_))
     }
 
     /// Returns `true` if the result denotes a failed transaction and failed rollback.
@@ -50,7 +52,7 @@ impl FsTransactionResult {
     }
 
     /// Consumes self and returns the included transaction result, discarding the rollback result.
-    pub fn as_tx_result(self) -> anyhow::Result<()> {
+    pub fn as_tx_result(self) -> anyhow::Result<FsTransaction> {
         self.tx_result.context("transaction failed")
     }
 

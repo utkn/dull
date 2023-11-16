@@ -5,6 +5,8 @@ use clap::Parser;
 
 use virtual_system::{VirtualSystem, VirtualSystemBuilder};
 
+use crate::transaction::TxProcessor;
+
 mod config_parser;
 mod module_parser;
 mod transaction;
@@ -77,6 +79,7 @@ fn main() -> anyhow::Result<()> {
             hard,
             force,
         } => {
+            println!("Deploying...");
             let ignore_filenames = utils::ignore_filenames(&config.global);
             let effective_build_path = if let Some(given_path) = build_path {
                 given_path
@@ -87,26 +90,31 @@ fn main() -> anyhow::Result<()> {
                     ))?
                     .into()
             };
-            println!("Preparing...");
-            let virt_system = VirtualSystem::read(effective_build_path, &config.global.build_file)?
-                .prepare_deployment(force, cli.verbose)
-                .context("preparation failed")?;
-            println!("Deploying...");
-            let deployment_result = if hard {
-                virt_system.hard_deploy(&ignore_filenames, cli.verbose)
+            let mut tx_proc = TxProcessor::new("deployment", cli.verbose);
+            let virt_system = if force {
+                VirtualSystem::read(effective_build_path, &config.global.build_file)?
+                    .clear_targets(&mut tx_proc)?
             } else {
-                virt_system.soft_deploy(cli.verbose)
+                VirtualSystem::read(effective_build_path, &config.global.build_file)?
+            }
+            .prepare_deployment(&mut tx_proc)
+            .context("preparation failed")?;
+            let res = if hard {
+                virt_system.hard_deploy(&ignore_filenames, &mut tx_proc)
+            } else {
+                virt_system.soft_deploy(&mut tx_proc)
             };
-            deployment_result.context("deployment failed")?;
+            res.context("deployment failed")?;
         }
         CliCommand::Undeploy => {
             println!("Undeploying...");
+            let mut tx_proc = TxProcessor::new("undeployment", cli.verbose);
             let last_build_path = utils::get_state(".", &config.global)
                 .context("no build was deployed, cannot undeploy")?
                 .into();
             let virt_system = VirtualSystem::read(last_build_path, &config.global.build_file)?;
             virt_system
-                .undeploy(cli.verbose)
+                .undeploy(&mut tx_proc)
                 .context("undeployment failed")?;
         }
         CliCommand::Info => {

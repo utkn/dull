@@ -1,0 +1,54 @@
+use anyhow::Context;
+
+use super::FsTransaction;
+
+#[derive(Clone, Debug)]
+pub struct TxProcessor {
+    name: String,
+    verbose: bool,
+    processed: Vec<FsTransaction>,
+}
+
+impl TxProcessor {
+    pub fn new<S: Into<String>>(name: S, verbose: bool) -> Self {
+        Self {
+            verbose,
+            name: name.into(),
+            processed: Default::default(),
+        }
+    }
+
+    pub fn run_optional(&mut self, tx: FsTransaction) -> anyhow::Result<()> {
+        let tx_result = tx
+            .run_atomic(self.verbose)
+            .context("could not run the transaction")?;
+        if !tx_result.is_success() {
+            tx_result.display_report();
+        }
+        if tx_result.is_fatal_failure() {
+            panic!("Fatal failure! Filesystem could not be restored.");
+        }
+        let undo_tx = tx_result.as_tx_result()?;
+        self.processed.push(undo_tx);
+        Ok(())
+    }
+
+    pub fn run_required(&mut self, tx: FsTransaction) -> anyhow::Result<()> {
+        let run_res = self.run_optional(tx);
+        if let Err(err) = run_res {
+            println!("Rolling {} back due to error: {:?}", self.name, err);
+            self.rollback()?;
+        }
+        Ok(())
+    }
+
+    fn rollback(&mut self) -> anyhow::Result<()> {
+        for prev_tx in self.processed.drain(..).rev() {
+            prev_tx
+                .run_haphazard(self.verbose)
+                .context("could not undo the previous transaction")
+                .expect("Fatal failure! Filesystem could not be restored.");
+        }
+        Ok(())
+    }
+}

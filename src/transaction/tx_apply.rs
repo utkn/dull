@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use rand::Rng;
 
-use super::{FsPrimitive, FsTransaction, FsTransactionResult};
+use super::{FsPrimitive, FsTransaction, TxResult};
 
 fn run_sequentially(
     mods: Vec<FsPrimitive>,
@@ -13,7 +13,7 @@ fn run_sequentially(
 ) -> anyhow::Result<()> {
     for m in mods.into_iter() {
         if let Some(info_icon) = info_icon {
-            println!("  {} {}", info_icon, m);
+            println!(" {} {}", info_icon, m);
         }
         let m_inv = m.apply(backup_dir)?;
         if let Some(inv_mods) = &mut inv_mods {
@@ -25,28 +25,25 @@ fn run_sequentially(
 
 impl FsTransaction {
     /// Interprets the transaction as a list of primitives and applies them sequentially until an error occurs.
-    pub fn run_haphazard(self, verbose: bool) -> FsTransactionResult {
+    pub fn run_haphazard(self, verbose: bool) -> anyhow::Result<()> {
         println!(
-            " Running filesystem modifications ({})",
+            "Running filesystem modifications ({})",
             self.name.unwrap_or(String::from("nameless"))
         );
-        if let Err(err) = run_sequentially(
+        run_sequentially(
             self.mods,
             None,
             None,
             if verbose { Some(".") } else { None },
-        ) {
-            println!("  ✗ Modification error");
-            return FsTransactionResult::tx_fail_only(err);
-        }
-        println!("  ✓ Execution succeeded");
-        return FsTransactionResult::success();
+        )?;
+        println!(" ✓ Execution succeeded");
+        return Ok(());
     }
 
     /// Runs the transaction in an atomic manner. This means if an error occurs, we try to rollback.
-    pub fn run_atomic(self, verbose: bool) -> anyhow::Result<FsTransactionResult> {
+    pub fn run_atomic(self, verbose: bool) -> anyhow::Result<TxResult> {
         println!(
-            " Running transaction ({})",
+            "Running transaction ({})",
             self.name.as_ref().unwrap_or(&String::from("nameless")),
         );
         // Create a random transaction id.
@@ -66,31 +63,32 @@ impl FsTransaction {
                 Some(&tx_backup_dir),
                 if verbose { Some("→") } else { None },
             ) {
-                println!("  ✗ Transaction error, trying to roll back");
+                println!(" ✗ Transaction error, trying to roll back");
                 inv_mods.reverse();
                 // Run the history (inverted) to rollback.
                 if let Err(rb_err) =
                     run_sequentially(inv_mods, None, None, if verbose { Some("←") } else { None })
                 {
-                    println!("  ✗ Rollback failed");
-                    FsTransactionResult::rb_fail(tx_err, rb_err)
+                    println!(" ✗ Rollback failed");
+                    TxResult::rb_fail(tx_err, rb_err)
                 } else {
-                    println!("  ✓ Rollback succeeded");
-                    FsTransactionResult::rb_success(tx_err)
+                    println!(" ✓ Rollback succeeded");
+                    TxResult::rb_success(tx_err)
                 }
             } else {
-                println!("  ✓ Transaction succeeded");
-                FsTransactionResult::success()
+                println!(" ✓ Transaction succeeded");
+                inv_mods.reverse();
+                TxResult::success(FsTransaction {
+                    name: self.name.map(|old_name| format!("undo {}", old_name)),
+                    mods: inv_mods,
+                })
             }
         };
-        // Remove the backups only if a fatal failure has not occurred.
         if res.is_fatal_failure() {
             println!(
-                "  ! Backed up files remain at {:?}, good luck =)",
+                " ! Backed up files remain at {:?}, good luck =)",
                 tx_backup_dir
             );
-        } else {
-            _ = std::fs::remove_dir_all(&tx_backup_dir);
         }
         return Ok(res);
     }
