@@ -20,7 +20,7 @@ pub struct Module {
 impl Module {
     /// Consumes `self` and generates a set of `ResolvedLink`s that represent the links
     /// that should be generated, with the targets are all prefixed with `target_prefix`.
-    pub fn emplace(self, target_prefix: PathBuf) -> Vec<ResolvedLink> {
+    pub fn emplace(self, target_prefix: &PathBuf) -> Vec<ResolvedLink> {
         self.sources
             .into_iter()
             .map(|source| {
@@ -31,8 +31,7 @@ impl Module {
             })
             .flatten()
             .flat_map(|(source, source_stripped)| {
-                let mut resolved_target = target_prefix.clone();
-                resolved_target.push(source_stripped);
+                let resolved_target = target_prefix.join(source_stripped);
                 ResolvedLink::new(&source, &resolved_target)
             })
             .collect_vec()
@@ -60,7 +59,6 @@ impl TraversalStrategy {
         directives: &[TraversalDirective],
         ignore_filenames: &[&str],
     ) -> anyhow::Result<Self> {
-        // If the path doesn't exists or is it unreachable, return `None`.
         if !path.try_exists().is_ok_and(|exists| exists) {
             anyhow::bail!("unreachable path {:?}", path);
         }

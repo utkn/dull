@@ -6,7 +6,7 @@ use rand::Rng;
 use crate::utils;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum FsPrimitive {
+pub(super) enum FsPrimitive {
     Link { original: PathBuf, target: PathBuf },
     CopyFile { source: PathBuf, target: PathBuf },
     RemoveFile(PathBuf),
@@ -43,7 +43,7 @@ impl std::fmt::Display for FsPrimitive {
 }
 
 impl FsPrimitive {
-    pub fn apply(self, backup_dir: Option<&PathBuf>) -> anyhow::Result<FsPrimitive> {
+    pub(super) fn apply(self, backup_dir: Option<&PathBuf>) -> anyhow::Result<FsPrimitive> {
         let backup_name = format!("{}", rand::thread_rng().gen::<u32>());
         match self {
             FsPrimitive::Link { original, target } => {

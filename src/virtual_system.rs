@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 use crate::{
     config_parser::{Config, GlobalConfig, ModuleConfig},
     module_parser::ModuleParser,
-    transaction::{tx_gen, FsPrimitive, FsTransaction, FsTransactionResult},
+    transaction::{tx_gen, FsTransaction, FsTransactionResult},
 };
 
 #[derive(Clone, Debug)]
@@ -40,6 +40,15 @@ impl ResolvedLink {
     }
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DeploymentState {}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct VirtualSystemState {
+    name: String,
+    leafs: Vec<PathBuf>,
+}
+
 pub struct VirtualSystemBuilder<'a> {
     modules_config: &'a [ModuleConfig],
     global_config: &'a GlobalConfig,
@@ -63,7 +72,7 @@ impl<'a> VirtualSystemBuilder<'a> {
         let generated_links = parsed_modules
             .into_iter()
             .zip(self.modules_config.iter())
-            .flat_map(|(m, conf)| m.emplace(conf.target.clone()))
+            .flat_map(|(m, conf)| m.emplace(&conf.target))
             .collect_vec();
         let effective_build_name = if let Some(build_name) = build_name {
             build_name
@@ -104,13 +113,8 @@ impl<'a> VirtualSystemBuilder<'a> {
                 "could not get the parent of {:?}",
                 curr_virt_target
             ))?;
-            tx.push(FsPrimitive::TryCreateDirs(
-                curr_virt_target_parent.to_path_buf(),
-            ));
-            tx.push(FsPrimitive::Link {
-                original: link.abs_source,
-                target: curr_virt_target,
-            });
+            tx.try_create_dirs(curr_virt_target_parent);
+            tx.link(link.abs_source, curr_virt_target);
         }
         Ok(tx)
     }
@@ -141,13 +145,13 @@ impl VirtualSystem<Undeployable> {
         })
     }
 
-    /// Prepares the filesystem for deployment.
+    /// Prepares the virtual system for deployment to the actual system.
     pub fn prepare_deployment(
         self,
         clear_target: bool,
         verbose: bool,
     ) -> anyhow::Result<VirtualSystem<Deployable>> {
-        let mut tx = FsTransaction::empty();
+        let mut tx = FsTransaction::empty().with_name("prepare");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (_, abs_target) = self.parse_leaf(&leaf)?;
@@ -159,9 +163,9 @@ impl VirtualSystem<Undeployable> {
             let abs_target_parent = abs_target
                 .parent()
                 .context(format!("could not get the parent of {:?}", abs_target))?;
-            tx.push(FsPrimitive::TryCreateDirs(abs_target_parent.to_path_buf()));
+            tx.try_create_dirs(abs_target_parent);
         }
-        let deployment_result = tx.with_name("prepare").run_atomic(verbose)?;
+        let deployment_result = tx.run_atomic(verbose)?;
         deployment_result.display_report();
         deployment_result.as_tx_result()?;
         Ok(VirtualSystem {
@@ -226,10 +230,7 @@ impl VirtualSystem<Deployable> {
             let (source, target) = self
                 .parse_leaf(&leaf)
                 .context(format!("could not parse the leaf {:?}", leaf))?;
-            tx.push(FsPrimitive::Link {
-                original: source,
-                target,
-            });
+            tx.link(source, target);
         }
         tx.with_name("soft deploy").run_atomic(verbose)
     }
@@ -271,14 +272,10 @@ impl VirtualSystem<Deployable> {
                 let inner_target_parent = inner_target
                     .parent()
                     .context(format!("could not get the parent of {:?}", inner_target))?;
-                let create_dirs_mod = FsPrimitive::TryCreateDirs(inner_target_parent.to_path_buf());
-                if !tx.mods.contains(&create_dirs_mod) {
-                    tx.push(create_dirs_mod);
+                if !tx.has_dir(inner_target_parent) {
+                    tx.try_create_dirs(inner_target_parent);
                 }
-                tx.push(FsPrimitive::CopyFile {
-                    source: inner_source,
-                    target: inner_target,
-                });
+                tx.copy_file(inner_source, inner_target);
             }
         }
         tx.with_name("hard deploy").run_atomic(verbose)

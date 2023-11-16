@@ -48,7 +48,7 @@ pub fn remove_dir(target: &PathBuf) -> anyhow::Result<FsTransaction> {
 pub fn remove_any(target: &PathBuf) -> anyhow::Result<FsTransaction> {
     let mut tx = FsTransaction::empty();
     if target.is_symlink() || target.is_file() {
-        tx.push(FsPrimitive::RemoveFile(target.clone()));
+        tx.remove_file(target);
     } else {
         tx.append(remove_dir(target)?);
     }
