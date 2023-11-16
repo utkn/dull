@@ -43,6 +43,7 @@ impl std::fmt::Display for FsPrimitive {
 }
 
 impl FsPrimitive {
+    /// Applies the primitive, modifying the filesystem. Returns the inverse primitive which restores the filesystem to its previous state.
     pub(super) fn apply(self, backup_dir: Option<&PathBuf>) -> anyhow::Result<FsPrimitive> {
         let backup_name = format!("{}", rand::thread_rng().gen::<u32>());
         match self {

@@ -1,3 +1,5 @@
+use anyhow::Context;
+
 #[derive(Debug)]
 pub struct FsTransactionResult {
     tx_result: anyhow::Result<()>,
@@ -49,7 +51,7 @@ impl FsTransactionResult {
 
     /// Consumes self and returns the included transaction result, discarding the rollback result.
     pub fn as_tx_result(self) -> anyhow::Result<()> {
-        self.tx_result
+        self.tx_result.context("transaction failed")
     }
 
     /// Prints a transaction report on the standard output.
