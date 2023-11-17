@@ -7,7 +7,6 @@ use walkdir::WalkDir;
 use crate::{
     config_parser::{GlobalConfig, ModuleConfig},
     utils,
-    virtual_system::ResolvedLink,
 };
 
 #[derive(Default, Debug, Clone)]
@@ -18,9 +17,9 @@ pub struct Module {
 }
 
 impl Module {
-    /// Consumes `self` and generates a set of `ResolvedLink`s that represent the links
+    /// Consumes `self` and generates a set of links that represent the links
     /// that should be generated, with the targets are all prefixed with `target_prefix`.
-    pub fn emplace(self, target_prefix: &PathBuf) -> Vec<ResolvedLink> {
+    pub fn emplace(self, target_prefix: &PathBuf) -> Vec<utils::ResolvedLink> {
         self.sources
             .into_iter()
             .map(|source| {
@@ -32,7 +31,7 @@ impl Module {
             .flatten()
             .flat_map(|(source, source_stripped)| {
                 let resolved_target = target_prefix.join(source_stripped);
-                ResolvedLink::new(&source, &resolved_target)
+                utils::ResolvedLink::new(&source, &resolved_target)
             })
             .collect_vec()
     }

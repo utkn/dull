@@ -1,16 +1,16 @@
 use anyhow::Context;
 
-use super::FsTransaction;
+use super::{Concrete, Transaction};
 
 #[derive(Debug)]
 pub struct TxResult {
-    tx_result: anyhow::Result<FsTransaction>,
+    tx_result: anyhow::Result<Transaction<Concrete>>,
     rb_result: Option<anyhow::Result<()>>,
 }
 
 impl TxResult {
     /// Returns a transaction result that denotes a successful execution.
-    pub fn success(tx_inv: FsTransaction) -> Self {
+    pub fn success(tx_inv: Transaction<Concrete>) -> Self {
         Self {
             tx_result: Ok(tx_inv),
             rb_result: None,
@@ -52,7 +52,7 @@ impl TxResult {
     }
 
     /// Consumes self and returns the included transaction result, discarding the rollback result.
-    pub fn as_tx_result(self) -> anyhow::Result<FsTransaction> {
+    pub fn as_tx_result(self) -> anyhow::Result<Transaction<Concrete>> {
         self.tx_result.context("transaction failed")
     }
 

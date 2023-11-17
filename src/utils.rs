@@ -1,8 +1,37 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
+use path_absolutize::Absolutize;
 
 use crate::config_parser::{Config, GlobalConfig};
+
+#[derive(Clone, Debug)]
+pub struct ResolvedLink {
+    pub abs_source: PathBuf,
+    pub abs_target: PathBuf,
+}
+
+impl ResolvedLink {
+    pub fn new(source: &PathBuf, target: &PathBuf) -> anyhow::Result<Self> {
+        Ok(Self {
+            abs_source: expand_path(source)?,
+            abs_target: expand_path(target)?,
+        })
+    }
+}
+
+pub fn expand_path(path: &PathBuf) -> anyhow::Result<PathBuf> {
+    let expanded_path = expanduser::expanduser(path.as_os_str().to_string_lossy())
+        .context(format!("could not expand the path {:?}", path))?;
+    let absolute_path = expanded_path
+        .absolutize()
+        .context(format!(
+            "could not absolutize the target path {:?}",
+            expanded_path
+        ))
+        .map(|p| p.into());
+    absolute_path
+}
 
 pub fn ignore_filenames<'a>(config: &'a GlobalConfig) -> Vec<&'a str> {
     vec![&config.linkthis_file, &config.linkthese_file]

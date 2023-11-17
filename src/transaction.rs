@@ -6,31 +6,58 @@ mod tx_result;
 
 use std::{collections::HashSet, path::PathBuf};
 
+use anyhow::Context;
 use primitives::*;
+use rand::Rng;
 pub use tx_apply::*;
 pub use tx_processor::*;
 pub use tx_result::*;
 
-#[derive(Clone, Debug)]
-pub struct FsTransaction {
-    name: String,
-    mods: Vec<FsPrimitive>,
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Ephemeral;
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Concrete {
+    id: String,
+    backup_dir: PathBuf,
 }
 
-impl FsTransaction {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Transaction<T> {
+    name: String,
+    mods: Vec<FsPrimitive>,
+    data: T,
+}
+
+impl Transaction<Ephemeral> {
     pub fn empty<S: Into<String>>(name: S) -> Self {
+        let name = name.into();
         Self {
-            name: name.into(),
+            name,
             mods: Default::default(),
+            data: Ephemeral,
         }
     }
 
-    pub fn append(&mut self, other: FsTransaction) {
+    fn from_primitives<S, V>(name: S, mods: V) -> Self
+    where
+        S: Into<String>,
+        V: IntoIterator<Item = FsPrimitive>,
+    {
+        let mut tx = Transaction::empty(name);
+        tx.mods = mods.into_iter().collect();
+        tx
+    }
+
+    pub fn append(&mut self, other: Self) {
         self.mods.extend(other.mods)
     }
-}
 
-impl FsTransaction {
+    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.name = name.into();
+        self
+    }
+
     pub fn link<P1, P2>(&mut self, original: P1, target: P2)
     where
         P1: Into<PathBuf>,
@@ -67,14 +94,58 @@ impl FsTransaction {
 
     pub fn try_create_dirs<P: Into<PathBuf>>(&mut self, target: P) {
         let path = target.into();
-        if path.try_exists().unwrap_or(true) || self.summarize().creates_dirs(&path) {
+        let self_summary = TxSummary::from(&*self);
+        if path.try_exists().unwrap_or(true) || self_summary.creates_dirs(&path) {
             return;
         }
         self.mods.push(FsPrimitive::CreateDirs(path));
     }
 
-    pub fn summarize(&self) -> TxSummary {
-        TxSummary::from(self)
+    /// Finalizes the transaction.
+    pub fn finalize(self) -> anyhow::Result<Transaction<Concrete>> {
+        Transaction::finalized(self)
+    }
+}
+
+impl Transaction<Concrete> {
+    /// Constructs a concrete transaction that can be executed.
+    pub fn finalized(tx: Transaction<Ephemeral>) -> anyhow::Result<Self> {
+        // Create a random transaction id.
+        let id = format!("{}-{}", tx.name, rand::thread_rng().gen::<u32>());
+        // Create a backup directory for the transaction.
+        let backup_dir = PathBuf::from("transactions").join(&id);
+        std::fs::create_dir_all(&backup_dir)
+            .context(format!("could not create the backup directory"))?;
+        let tx_file_path = backup_dir.join("tx");
+        // Construct the concrete transaction.
+        let concrete_tx = Transaction {
+            name: tx.name,
+            mods: tx.mods,
+            data: Concrete { id, backup_dir },
+        };
+        // Write it into a file.
+        let tx_file = std::fs::File::create(&tx_file_path).context(format!(
+            "could not write the transaction file at {:?}",
+            tx_file_path
+        ))?;
+        let tx_wr = std::io::BufWriter::new(tx_file);
+        serde_json::to_writer(tx_wr, &concrete_tx).context(format!(
+            "could not serialize the transaction into {:?}",
+            tx_file_path
+        ))?;
+        // Return the concretized transaction.
+        Ok(concrete_tx)
+    }
+
+    /// Reads a concrete transaction from a file.
+    pub fn read(path: PathBuf) -> anyhow::Result<Self> {
+        let tx_file = std::fs::File::open(&path)
+            .context(format!("could not read the transaction file at {:?}", path))?;
+        let tx_rd = std::io::BufReader::new(tx_file);
+        serde_json::from_reader(tx_rd).context(format!(
+            "could not deserialzie the transaction from {:?}",
+            path
+        ))
     }
 }
 
@@ -85,8 +156,8 @@ pub struct TxSummary {
     dirs_to_remove: HashSet<PathBuf>,
 }
 
-impl From<&FsTransaction> for TxSummary {
-    fn from(tx: &FsTransaction) -> Self {
+impl<T> From<&Transaction<T>> for TxSummary {
+    fn from(tx: &Transaction<T>) -> Self {
         let mut files_to_create = HashSet::new();
         let mut files_to_remove = HashSet::new();
         let mut dirs_to_create = HashSet::new();

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 
+use transaction::Transaction;
 use virtual_system::{VirtualSystem, VirtualSystemBuilder};
 
 use crate::transaction::TxProcessor;
@@ -56,6 +57,19 @@ enum CliCommand {
 
     /// Show information about the builds
     Info,
+
+    /// Clears the transaction cache.
+    ClearCache,
+
+    /// Clears the builds.
+    ClearBuilds,
+
+    /// Runs an atomic transaction (advanced).
+    RunTransaction {
+        #[arg(short, long, value_name = "PATH")]
+        /// Path to the transaction file
+        file: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -120,7 +134,7 @@ fn main() -> anyhow::Result<()> {
         CliCommand::Info => {
             let latest_build = utils::get_state(".", &config.global)
                 .and_then(|s| VirtualSystem::read(s.into(), &config.global.build_file))
-                .map(|vs| vs.name)
+                .map(|vs| vs.path.to_string_lossy().to_string())
                 .unwrap_or(String::from("N/A"));
             println!("Latest build: {:?}", latest_build);
             let virt_systems = glob::glob("./**/.dull-build")
@@ -129,8 +143,16 @@ fn main() -> anyhow::Result<()> {
                 .flat_map(|path| path.parent().map(|p| p.to_path_buf()))
                 .flat_map(|path| VirtualSystem::read(path, &config.global.build_file));
             for virt_system in virt_systems {
-                println!("=> build {:?} at {:?}", virt_system.name, virt_system.path);
+                println!("=> build {:?}", virt_system.path);
             }
+        }
+        CliCommand::ClearCache => todo!(),
+        CliCommand::ClearBuilds => todo!(),
+        CliCommand::RunTransaction { file } => {
+            Transaction::read(file)
+                .context("could not read the transaction")?
+                .run_atomic(cli.verbose)
+                .display_report();
         }
     }
     Ok(())

@@ -2,43 +2,16 @@ use std::{marker::PhantomData, path::PathBuf};
 
 use anyhow::Context;
 use itertools::Itertools;
-use path_absolutize::Absolutize;
+
 use rand::Rng;
 use walkdir::WalkDir;
 
 use crate::{
     config_parser::{Config, GlobalConfig, ModuleConfig},
     module_parser::ModuleParser,
-    transaction::{tx_gen, FsTransaction, TxProcessor},
+    transaction::{tx_gen, Transaction, TxProcessor},
+    utils,
 };
-
-#[derive(Clone, Debug)]
-pub struct ResolvedLink {
-    pub abs_source: PathBuf,
-    pub abs_target: PathBuf,
-}
-
-impl ResolvedLink {
-    fn expand_path(path: &PathBuf) -> anyhow::Result<PathBuf> {
-        let expanded_path = expanduser::expanduser(path.as_os_str().to_string_lossy())
-            .context(format!("could not expand the path {:?}", path))?;
-        let absolute_path = expanded_path
-            .absolutize()
-            .context(format!(
-                "could not absolutize the target path {:?}",
-                expanded_path
-            ))
-            .map(|p| p.into());
-        absolute_path
-    }
-
-    pub fn new(source: &PathBuf, target: &PathBuf) -> anyhow::Result<Self> {
-        Ok(Self {
-            abs_source: ResolvedLink::expand_path(source)?,
-            abs_target: ResolvedLink::expand_path(target)?,
-        })
-    }
-}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DeploymentState {}
@@ -81,9 +54,12 @@ impl<'a> VirtualSystemBuilder<'a> {
         };
         // Generate the virtual system.
         let build_dir = PathBuf::from("builds").join(&effective_build_name);
-        Self::build_at_root(build_dir.clone(), generated_links)?
+        tx_gen::build_at_root(build_dir.clone(), generated_links)?
+            .with_name("Build")
+            .finalize()
+            .context("could not create the build transaction")?
             .run_haphazard(verbose)
-            .context("build at root failed")?;
+            .context("build failed")?;
         // Write the build information
         let build_info_path = build_dir.join(&self.global_config.build_file);
         std::fs::write(&build_info_path, format!("{}", effective_build_name)).context(format!(
@@ -92,32 +68,6 @@ impl<'a> VirtualSystemBuilder<'a> {
         ))?;
         Ok(build_dir)
     }
-
-    fn build_at_root<P: Into<PathBuf>>(
-        root: P,
-        links: Vec<ResolvedLink>,
-    ) -> anyhow::Result<FsTransaction> {
-        let mut tx = FsTransaction::empty("build");
-        let root: PathBuf = root.into();
-        for link in links.into_iter() {
-            let mut curr_virt_target = root.clone();
-            let relativized_target = if link.abs_target.is_absolute() {
-                link.abs_target.strip_prefix("/")?
-            } else {
-                link.abs_target.as_path()
-            };
-            curr_virt_target.push(relativized_target);
-            curr_virt_target = ResolvedLink::expand_path(&curr_virt_target)?;
-            // Create the virtual directory if it does not exist.
-            let curr_virt_target_parent = curr_virt_target.parent().context(format!(
-                "could not get the parent of {:?}",
-                curr_virt_target
-            ))?;
-            tx.try_create_dirs(curr_virt_target_parent);
-            tx.link(link.abs_source, curr_virt_target);
-        }
-        Ok(tx)
-    }
 }
 
 pub struct Deployable;
@@ -125,9 +75,23 @@ pub struct Undeployable;
 
 #[derive(Clone, Debug)]
 pub struct VirtualSystem<T> {
-    pub name: String,
     pub path: PathBuf,
     pub pd: PhantomData<T>,
+}
+
+impl VirtualSystem<Undeployable> {
+    /// Reads the virtual system at the given path.
+    pub fn read(path: PathBuf, build_file_name: &str) -> anyhow::Result<Self> {
+        let build_file_path = path.join(build_file_name);
+        std::fs::read_to_string(&build_file_path).context(format!(
+            "could not read the build file {:?}",
+            build_file_path
+        ))?;
+        Ok(Self {
+            path,
+            pd: Default::default(),
+        })
+    }
 }
 
 impl<T> VirtualSystem<T> {
@@ -138,8 +102,8 @@ impl<T> VirtualSystem<T> {
             leaf.strip_prefix(&self.path)
                 .context("leaf path is malformed")?,
         );
-        let abs_target = ResolvedLink::expand_path(&target)?;
-        let abs_source = ResolvedLink::expand_path(leaf)?;
+        let abs_target = utils::expand_path(&target)?;
+        let abs_source = utils::expand_path(leaf)?;
         // Get the original source, pointing to the regular file in the module directory.
         let abs_source_canon = abs_source.canonicalize().context(format!(
             "could not canonicalize the source {:?}",
@@ -161,7 +125,7 @@ impl<T> VirtualSystem<T> {
     }
 
     pub fn undeploy(self, tx_proc: &mut TxProcessor) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty("undeploy");
+        let mut tx = Transaction::empty("Undeploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             // The target is already encoded in the leaf source.
@@ -169,31 +133,17 @@ impl<T> VirtualSystem<T> {
                 leaf.strip_prefix(&self.path)
                     .context("leaf path is malformed")?,
             );
-            let abs_target = ResolvedLink::expand_path(&target)?;
+            let abs_target = utils::expand_path(&target)?;
             tx.append(tx_gen::remove_any(&abs_target)?);
         }
-        tx_proc.run_required(tx)
+        tx_proc.run_required(tx.finalize()?)
     }
 }
 
 impl VirtualSystem<Undeployable> {
-    /// Reads the virtual system at the given path.
-    pub fn read(path: PathBuf, build_file_name: &str) -> anyhow::Result<Self> {
-        let build_file_path = path.join(build_file_name);
-        let build_name = std::fs::read_to_string(&build_file_path).context(format!(
-            "could not read the build file {:?}",
-            build_file_path
-        ))?;
-        Ok(Self {
-            path,
-            name: build_name,
-            pd: Default::default(),
-        })
-    }
-
     /// Clears the target files/folders in the actual filesystem.
     pub fn clear_targets(self, tx_proc: &mut TxProcessor) -> anyhow::Result<Self> {
-        let mut tx = FsTransaction::empty("clear targets");
+        let mut tx = Transaction::empty("ClearTargets");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (_, abs_target) = self.parse_leaf(&leaf)?;
@@ -202,7 +152,7 @@ impl VirtualSystem<Undeployable> {
                 tx.append(tx_gen::remove_any(&abs_target)?);
             }
         }
-        tx_proc.run_required(tx)?;
+        tx_proc.run_required(tx.finalize()?)?;
         Ok(self)
     }
 
@@ -212,7 +162,7 @@ impl VirtualSystem<Undeployable> {
         self,
         tx_proc: &mut TxProcessor,
     ) -> anyhow::Result<VirtualSystem<Deployable>> {
-        let mut tx = FsTransaction::empty("prepare");
+        let mut tx = Transaction::empty("Prepare");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (_, abs_target) = self.parse_leaf(&leaf)?;
@@ -222,9 +172,8 @@ impl VirtualSystem<Undeployable> {
                 .context(format!("could not get the parent of {:?}", abs_target))?;
             tx.try_create_dirs(abs_target_parent);
         }
-        tx_proc.run_required(tx)?;
+        tx_proc.run_required(tx.finalize()?)?;
         Ok(VirtualSystem {
-            name: self.name,
             path: self.path,
             pd: Default::default(),
         })
@@ -233,7 +182,7 @@ impl VirtualSystem<Undeployable> {
 
 impl VirtualSystem<Deployable> {
     pub fn soft_deploy(self, tx_proc: &mut TxProcessor) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty("soft deploy");
+        let mut tx = Transaction::empty("SoftDeploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (source, target) = self
@@ -241,7 +190,7 @@ impl VirtualSystem<Deployable> {
                 .context(format!("could not parse the leaf {:?}", leaf))?;
             tx.link(source, target);
         }
-        tx_proc.run_required(tx)
+        tx_proc.run_required(tx.finalize()?)
     }
 
     pub fn hard_deploy(
@@ -249,7 +198,7 @@ impl VirtualSystem<Deployable> {
         ignore_filenames: &[&str],
         tx_proc: &mut TxProcessor,
     ) -> anyhow::Result<()> {
-        let mut tx = FsTransaction::empty("hard deploy");
+        let mut tx = Transaction::empty("HardDeploy");
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (source, target) = self
@@ -287,6 +236,6 @@ impl VirtualSystem<Deployable> {
                 tx.copy_file(inner_source, inner_target);
             }
         }
-        tx_proc.run_required(tx)
+        tx_proc.run_required(tx.finalize()?)
     }
 }

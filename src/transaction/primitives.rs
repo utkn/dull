@@ -5,7 +5,7 @@ use rand::Rng;
 
 use crate::utils;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(super) enum FsPrimitive {
     Link { original: PathBuf, target: PathBuf },
     CopyFile { source: PathBuf, target: PathBuf },
