@@ -29,16 +29,14 @@ pub struct ResolvedConfig {
     pub modules: Vec<ModuleConfig>,
 }
 
-impl From<Config> for ResolvedConfig {
-    fn from(config: Config) -> Self {
+impl ResolvedConfig {
+    fn root(config: Config) -> Self {
         ResolvedConfig {
             modules: config.module,
         }
     }
-}
-
-impl ResolvedConfig {
-    pub fn merged(mut self, mut parent_config: ResolvedConfig) -> Self {
+    /// Merges this configuration with the given `parent_config` and returns the result.
+    fn merged(mut self, mut parent_config: ResolvedConfig) -> Self {
         self.modules.extend(parent_config.modules.drain(..));
         self
     }
@@ -54,10 +52,7 @@ pub fn read_config<P: Into<PathBuf>>(p: P) -> anyhow::Result<ResolvedConfig> {
                 config_file_path
             ))
         })?;
-    if config.include.is_empty() {
-        return Ok(ResolvedConfig::from(config));
-    }
-    let resolved_children = config
+    let inclusions = config
         .include
         .iter()
         .map(|include_config| (read_config(&include_config.path), &include_config.path))
@@ -73,7 +68,10 @@ pub fn read_config<P: Into<PathBuf>>(p: P) -> anyhow::Result<ResolvedConfig> {
             };
             result
         })
-        .reduce(|acc, e| acc.merged(e))
-        .unwrap();
-    Ok(resolved_children.merged(ResolvedConfig::from(config)))
+        .reduce(|acc, e| acc.merged(e));
+    let parent = ResolvedConfig::root(config);
+    match inclusions {
+        Some(inclusions) => Ok(inclusions.merged(parent)),
+        None => Ok(parent),
+    }
 }

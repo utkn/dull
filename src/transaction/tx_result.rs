@@ -1,11 +1,11 @@
 use anyhow::Context;
 
-use super::{Concrete, Transaction};
+use super::Transaction;
 
 #[derive(Debug)]
 pub enum TxResult {
     /// Returns a transaction result that denotes a successful execution.
-    Success(Transaction<Concrete>),
+    Success(Transaction),
     /// Returns a transaction result that denotes a failure during transaction execution with successful rollback.
     TxFailure(anyhow::Error),
     /// Returns a transaction result that denotes a failure during transaction execution with failed rollback.
@@ -33,7 +33,7 @@ impl TxResult {
     }
 
     /// Consumes self and returns the included transaction result, discarding the rollback result.
-    pub fn as_tx_result(self) -> anyhow::Result<Transaction<Concrete>> {
+    pub fn as_tx_result(self) -> anyhow::Result<Transaction> {
         match self {
             TxResult::Success(undo_tx) => Ok(undo_tx),
             TxResult::TxFailure(tx_err) => Err(tx_err).context("transaction failed"),

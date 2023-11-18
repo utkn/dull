@@ -1,12 +1,12 @@
 use anyhow::Context;
 
-use super::{Concrete, Transaction};
+use super::Transaction;
 
 #[derive(Clone, Debug)]
 pub struct TxProcessor {
     name: String,
     verbose: bool,
-    processed: Vec<Transaction<Concrete>>,
+    processed: Vec<Transaction>,
 }
 
 impl TxProcessor {
@@ -19,7 +19,7 @@ impl TxProcessor {
     }
 
     /// Runs the given transaction such that the failure of it won't affect the overall progress.
-    pub fn run_optional(&mut self, tx: Transaction<Concrete>) -> anyhow::Result<()> {
+    pub fn run_optional(&mut self, tx: Transaction) -> anyhow::Result<()> {
         let tx_result = tx.run_atomic(self.verbose);
         if !tx_result.is_success() {
             tx_result.display_report();
@@ -33,7 +33,7 @@ impl TxProcessor {
     }
 
     /// Runs the given transaction such that the failure of it will cause all the previous transactions executed by this processor to be reversed.
-    pub fn run_required(&mut self, tx: Transaction<Concrete>) -> anyhow::Result<()> {
+    pub fn run_required(&mut self, tx: Transaction) -> anyhow::Result<()> {
         let run_res = self.run_optional(tx);
         if let Err(err) = run_res {
             println!("Rolling {} back due to error", self.name);

@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 
-use super::{Concrete, FsPrimitive, Transaction, TxResult};
+use crate::transaction::TxBuilder;
+
+use super::{FsPrimitive, Transaction, TxResult};
 
 fn run_sequentially(
     mods: Vec<FsPrimitive>,
@@ -23,13 +25,13 @@ fn run_sequentially(
     Ok(())
 }
 
-impl Transaction<Concrete> {
+impl Transaction {
     /// Interprets the transaction as a list of primitives and applies them sequentially until an error occurs.
     pub fn run_haphazard(self, verbose: bool) -> anyhow::Result<()> {
         println!("Running filesystem modifications ({})", self.name);
-        println!("Directory: {:?}", self.data.backup_dir);
+        println!("Directory: {:?}", self.backup_dir);
         if let Err(err) = run_sequentially(
-            self.mods,
+            self.primitives,
             None,
             None,
             if verbose { Some(".") } else { None },
@@ -48,18 +50,18 @@ impl Transaction<Concrete> {
         // Run the transaction sequentially while keeping track of its inverse.
         let mut inv_mods = vec![];
         let run_res = run_sequentially(
-            self.mods,
+            self.primitives,
             Some(&mut inv_mods),
-            Some(&self.data.backup_dir),
+            Some(&self.backup_dir),
             if verbose { Some("→") } else { None },
         )
         // Then try to generate the undo transaction from the inverted primitives.
         .and_then(|_| {
             // TODO: fix the unecessary clone
-            let undo_tx =
-                Transaction::from_primitives(format!("Undo{}", self.name), inv_mods.clone());
-            let undo_tx =
-                Transaction::finalized(undo_tx).context("could not create the undo transaction")?;
+            let mut txb = TxBuilder::empty();
+            // Clone is kind of unnecessary, but I want to make the compiler happy.
+            inv_mods.clone().into_iter().for_each(|p| txb.push(p));
+            let undo_tx = txb.build(format!("Undo{}", self.name))?;
             Ok(undo_tx)
         });
         match run_res {
@@ -76,7 +78,7 @@ impl Transaction<Concrete> {
                     println!(" ✗ Transaction rollback failed");
                     println!(
                         " ✗ Backed up files remain at {:?}, good luck =)",
-                        self.data.backup_dir
+                        self.backup_dir
                     );
                     TxResult::FatalFailure { tx_err, rb_err }
                 } else {

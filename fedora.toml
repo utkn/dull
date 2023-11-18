@@ -1,7 +1,0 @@
-[[include]]
-path = "global.toml"
-
-[[module]]
-source = "modules/kde"
-target = "~/testconfig"
-
