@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use path_absolutize::Absolutize;
 
-use crate::config_parser::{Config, GlobalConfig};
+use crate::globals;
 
 #[derive(Clone, Debug)]
 pub struct ResolvedLink {
@@ -33,43 +33,16 @@ pub fn expand_path(path: &PathBuf) -> anyhow::Result<PathBuf> {
     absolute_path
 }
 
-pub fn ignore_filenames<'a>(config: &'a GlobalConfig) -> Vec<&'a str> {
-    vec![&config.linkthis_file, &config.linkthese_file]
-}
-
-pub fn read_config<P: Into<PathBuf>>(p: P) -> Config {
-    let config_file_path = p.into();
-    let config: Config = std::fs::read_to_string(&config_file_path)
-        .context(format!("could not read config file {:?}", config_file_path))
-        .and_then(|file_contents| {
-            toml::from_str(&file_contents).context(format!(
-                "could not parse config file {:?}",
-                config_file_path
-            ))
-        })
-        .map_err(|err| {
-            println!("Error: {:?}", err);
-            println!("Falling back to default config");
-            ()
-        })
-        .unwrap_or_default();
-    config
-}
-
-pub fn get_state<P: Into<PathBuf>>(p: P, global_config: &GlobalConfig) -> anyhow::Result<String> {
+pub fn get_state<P: Into<PathBuf>>(p: P) -> anyhow::Result<String> {
     let root_path = p.into();
-    let state_file = root_path.join(&global_config.state_file);
+    let state_file = root_path.join(globals::STATE_FILE_NAME);
     std::fs::read_to_string(&state_file)
         .context(format!("could not get the state file {:?}", state_file))
 }
 
-pub fn set_state<P: Into<PathBuf>>(
-    p: P,
-    global_config: &GlobalConfig,
-    contents: &str,
-) -> anyhow::Result<()> {
+pub fn set_state<P: Into<PathBuf>>(p: P, contents: &str) -> anyhow::Result<()> {
     let root_path = p.into();
-    let state_file = root_path.join(&global_config.state_file);
+    let state_file = root_path.join(globals::STATE_FILE_NAME);
     std::fs::write(&state_file, contents)
         .context(format!("could not set the state file {:?}", state_file))
 }

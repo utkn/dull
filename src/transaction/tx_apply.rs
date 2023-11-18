@@ -27,6 +27,7 @@ impl Transaction<Concrete> {
     /// Interprets the transaction as a list of primitives and applies them sequentially until an error occurs.
     pub fn run_haphazard(self, verbose: bool) -> anyhow::Result<()> {
         println!("Running filesystem modifications ({})", self.name);
+        println!("Directory: {:?}", self.data.backup_dir);
         if let Err(err) = run_sequentially(
             self.mods,
             None,
@@ -64,7 +65,7 @@ impl Transaction<Concrete> {
         match run_res {
             Ok(undo_tx) => {
                 println!(" ✓ Transaction succeeded");
-                TxResult::success(undo_tx)
+                TxResult::Success(undo_tx)
             }
             Err(tx_err) => {
                 println!(" ✗ Transaction failed, trying to roll back");
@@ -77,10 +78,10 @@ impl Transaction<Concrete> {
                         " ✗ Backed up files remain at {:?}, good luck =)",
                         self.data.backup_dir
                     );
-                    TxResult::rb_fail(tx_err, rb_err)
+                    TxResult::FatalFailure { tx_err, rb_err }
                 } else {
                     println!(" ✓ Transaction rollback succeeded");
-                    TxResult::rb_success(tx_err)
+                    TxResult::TxFailure(tx_err)
                 }
             }
         }

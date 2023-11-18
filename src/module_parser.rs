@@ -4,10 +4,7 @@ use anyhow::Context;
 use itertools::Itertools;
 use walkdir::WalkDir;
 
-use crate::{
-    config_parser::{GlobalConfig, ModuleConfig},
-    utils,
-};
+use crate::{config_parser::ModuleConfig, globals, utils};
 
 #[derive(Default, Debug, Clone)]
 pub struct Module {
@@ -102,15 +99,11 @@ impl TraversalStrategy {
 #[derive(Debug)]
 pub struct ModuleParser<'a> {
     module_config: &'a ModuleConfig,
-    global_config: &'a GlobalConfig,
 }
 
 impl<'a> ModuleParser<'a> {
-    pub fn from_config(module_config: &'a ModuleConfig, global_config: &'a GlobalConfig) -> Self {
-        Self {
-            module_config,
-            global_config,
-        }
+    pub fn from_config(module_config: &'a ModuleConfig) -> Self {
+        Self { module_config }
     }
 
     pub fn parse(self) -> anyhow::Result<Module> {
@@ -136,9 +129,9 @@ impl<'a> ModuleParser<'a> {
             .iter()
             .flat_map(|(parent, file)| {
                 let file_name = file.file_name()?.to_string_lossy();
-                if file_name == self.global_config.linkthis_file {
+                if file_name == globals::LINKTHIS_FILENAME {
                     Some(TraversalDirective::LinkThis(parent))
-                } else if file_name == self.global_config.linkthese_file {
+                } else if file_name == globals::LINKTHESE_FILENAME {
                     Some(TraversalDirective::LinkThese(parent))
                 } else {
                     None
@@ -167,7 +160,7 @@ impl<'a> ModuleParser<'a> {
             match TraversalStrategy::try_determine(
                 curr_path.clone(),
                 &directives,
-                &utils::ignore_filenames(self.global_config),
+                globals::DEFAULT_IGNOREFILES,
             ) {
                 Ok(strategy) => match strategy {
                     TraversalStrategy::LinkThis(path) => {

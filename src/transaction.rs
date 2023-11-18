@@ -1,14 +1,15 @@
+use std::{collections::HashSet, path::PathBuf};
+
+use anyhow::Context;
+use primitives::*;
+use rand::Rng;
+
 mod primitives;
 mod tx_apply;
 pub mod tx_gen;
 mod tx_processor;
 mod tx_result;
 
-use std::{collections::HashSet, path::PathBuf};
-
-use anyhow::Context;
-use primitives::*;
-use rand::Rng;
 pub use tx_apply::*;
 pub use tx_processor::*;
 pub use tx_result::*;
@@ -88,10 +89,6 @@ impl Transaction<Ephemeral> {
         self.mods.push(FsPrimitive::RemoveEmptyDir(target.into()))
     }
 
-    pub fn create_dirs<P: Into<PathBuf>>(&mut self, target: P) {
-        self.mods.push(FsPrimitive::CreateDirs(target.into()));
-    }
-
     pub fn try_create_dirs<P: Into<PathBuf>>(&mut self, target: P) {
         let path = target.into();
         let self_summary = TxSummary::from(&*self);
@@ -150,10 +147,10 @@ impl Transaction<Concrete> {
 }
 
 pub struct TxSummary {
-    files_to_create: HashSet<PathBuf>,
-    files_to_remove: HashSet<PathBuf>,
+    _files_to_create: HashSet<PathBuf>,
+    _files_to_remove: HashSet<PathBuf>,
     dirs_to_create: HashSet<PathBuf>,
-    dirs_to_remove: HashSet<PathBuf>,
+    _dirs_to_remove: HashSet<PathBuf>,
 }
 
 impl<T> From<&Transaction<T>> for TxSummary {
@@ -183,40 +180,38 @@ impl<T> From<&Transaction<T>> for TxSummary {
                     dirs_to_create.remove(p);
                 }
                 FsPrimitive::CreateDirs(p) => {
-                    dirs_to_create.insert(p.to_path_buf());
-                    // The directories that were removed previously that are prefixes of `p`
-                    // are recreated.
-                    dirs_to_remove = dirs_to_remove
-                        .drain()
-                        .filter(|rm_dir| !p.starts_with(rm_dir))
-                        .collect();
+                    p.ancestors().for_each(|ancestor| {
+                        let ancestor = ancestor.to_path_buf();
+                        dirs_to_remove.remove(&ancestor);
+                        dirs_to_create.insert(ancestor);
+                    });
                 }
                 FsPrimitive::Nop => {}
             }
         }
         Self {
-            files_to_create,
-            files_to_remove,
+            _files_to_create: files_to_create,
+            _files_to_remove: files_to_remove,
             dirs_to_create,
-            dirs_to_remove,
+            _dirs_to_remove: dirs_to_remove,
         }
     }
 }
 
 impl TxSummary {
-    pub fn creates_file(&self, p: &PathBuf) -> bool {
-        self.files_to_create.contains(p)
-    }
-
-    pub fn removes_file(&self, p: &PathBuf) -> bool {
-        self.files_to_remove.contains(p)
-    }
-
     pub fn creates_dirs(&self, p: &PathBuf) -> bool {
         self.dirs_to_create.contains(p)
     }
 
-    pub fn removes_empty_dir(&self, p: &PathBuf) -> bool {
-        self.dirs_to_remove.contains(p)
+    pub fn _creates_file(&self, p: &PathBuf) -> bool {
+        self._files_to_create.contains(p)
+    }
+
+    pub fn _removes_file(&self, p: &PathBuf) -> bool {
+        self._files_to_remove.contains(p)
+    }
+
+    pub fn _removes_empty_dir(&self, p: &PathBuf) -> bool {
+        self._dirs_to_remove.contains(p)
     }
 }

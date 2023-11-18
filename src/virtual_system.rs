@@ -7,39 +7,28 @@ use rand::Rng;
 use walkdir::WalkDir;
 
 use crate::{
-    config_parser::{Config, GlobalConfig, ModuleConfig},
+    config_parser::{ModuleConfig, ResolvedConfig},
+    globals,
     module_parser::ModuleParser,
     transaction::{tx_gen, Transaction, TxProcessor},
     utils,
 };
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct DeploymentState {}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct VirtualSystemState {
-    name: String,
-    leafs: Vec<PathBuf>,
-}
-
 pub struct VirtualSystemBuilder<'a> {
     modules_config: &'a [ModuleConfig],
-    global_config: &'a GlobalConfig,
 }
 
 impl<'a> VirtualSystemBuilder<'a> {
-    pub fn from_config(config: &'a Config) -> Self {
+    pub fn from_config(config: &'a ResolvedConfig) -> Self {
         Self {
-            modules_config: &config.module,
-            global_config: &config.global,
+            modules_config: &config.modules,
         }
     }
 
     pub fn build(self, build_name: Option<String>, verbose: bool) -> anyhow::Result<PathBuf> {
         let mut parsed_modules = vec![];
         for module_config in self.modules_config.iter() {
-            let parsed_module =
-                ModuleParser::from_config(module_config, &self.global_config).parse()?;
+            let parsed_module = ModuleParser::from_config(module_config).parse()?;
             parsed_modules.push(parsed_module);
         }
         let generated_links = parsed_modules
@@ -61,7 +50,7 @@ impl<'a> VirtualSystemBuilder<'a> {
             .run_haphazard(verbose)
             .context("build failed")?;
         // Write the build information
-        let build_info_path = build_dir.join(&self.global_config.build_file);
+        let build_info_path = build_dir.join(globals::BUILD_FILE_NAME);
         std::fs::write(&build_info_path, format!("{}", effective_build_name)).context(format!(
             "could not generate the build information at {:?}",
             build_info_path
@@ -81,8 +70,8 @@ pub struct VirtualSystem<T> {
 
 impl VirtualSystem<Undeployable> {
     /// Reads the virtual system at the given path.
-    pub fn read(path: PathBuf, build_file_name: &str) -> anyhow::Result<Self> {
-        let build_file_path = path.join(build_file_name);
+    pub fn read(path: PathBuf) -> anyhow::Result<Self> {
+        let build_file_path = path.join(globals::BUILD_FILE_NAME);
         std::fs::read_to_string(&build_file_path).context(format!(
             "could not read the build file {:?}",
             build_file_path
@@ -119,8 +108,9 @@ impl<T> VirtualSystem<T> {
             .follow_root_links(false)
             .into_iter()
             .flatten()
+            // Symlinks are the only leafs
+            .filter(|p| p.path_is_symlink())
             .map(|p| p.path().to_path_buf())
-            .filter(|p| p.is_symlink())
             .collect_vec()
     }
 

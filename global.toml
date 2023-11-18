@@ -1,0 +1,12 @@
+[[module]]
+source = "modules/alacritty"
+target = "~/testconfig/alacritty"
+
+[[module]]
+source = "modules/helix"
+target = "~/testconfig/helix"
+
+[[module]]
+source = "modules/fish"
+target = "~/testconfig/fish"
+
