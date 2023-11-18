@@ -4,30 +4,32 @@ use crate::transaction::TxBuilder;
 
 use super::{FsPrimitive, Transaction, TxResult};
 
+/// Runs the given list of primitives sequentially while populating the given list of inverse primitives.
 fn run_sequentially(
-    mods: Vec<FsPrimitive>,
-    mut inv_mods: Option<&mut Vec<FsPrimitive>>,
+    primitives: Vec<FsPrimitive>,
+    mut inv_primitives: Option<&mut Vec<FsPrimitive>>,
     backup_dir: Option<&PathBuf>,
     info_icon: Option<&'static str>,
 ) -> anyhow::Result<()> {
-    for m in mods.into_iter() {
+    for m in primitives.into_iter() {
         if let Some(info_icon) = info_icon {
             println!(" {} {}", info_icon, m);
         }
         let m_inv = m.apply(backup_dir)?;
-        if let Some(inv_mods) = &mut inv_mods {
-            inv_mods.push(m_inv);
+        if let Some(inv_mods) = &mut inv_primitives {
+            inv_mods.insert(0, m_inv);
         }
     }
-    inv_mods.map(|inv_mods| inv_mods.reverse());
     Ok(())
 }
 
 impl Transaction {
     /// Interprets the transaction as a list of primitives and applies them sequentially until an error occurs.
     pub fn run_haphazard(self, verbose: bool) -> anyhow::Result<()> {
-        println!("Running filesystem modifications ({})", self.name);
-        println!("Directory: {:?}", self.backup_dir);
+        if verbose {
+            println!("Running filesystem modifications ({})", self.name);
+            println!("Directory: {:?}", self.backup_dir);
+        }
         if let Err(err) = run_sequentially(
             self.primitives,
             None,
@@ -37,14 +39,18 @@ impl Transaction {
             println!(" ✗ Execution failed");
             Err(err)
         } else {
-            println!(" ✓ Execution succeeded");
+            if verbose {
+                println!(" ✓ Execution succeeded");
+            }
             Ok(())
         }
     }
 
     /// Runs the transaction in an atomic manner. This means if an error occurs, we try to rollback.
     pub fn run_atomic(self, verbose: bool) -> TxResult {
-        println!("Running transaction ({})", self.name);
+        if verbose {
+            println!("Running transaction ({})", self.name);
+        }
         // Run the transaction sequentially while keeping track of its inverse.
         let mut inv_mods = vec![];
         let run_res = run_sequentially(
@@ -55,7 +61,6 @@ impl Transaction {
         )
         // Then try to generate the undo transaction from the inverted primitives.
         .and_then(|_| {
-            // TODO: fix the unecessary clone
             let mut txb = TxBuilder::empty();
             // Clone is kind of unnecessary, but I want to make the compiler happy.
             inv_mods.clone().into_iter().for_each(|p| txb.push(p));
@@ -64,7 +69,9 @@ impl Transaction {
         });
         match run_res {
             Ok(undo_tx) => {
-                println!(" ✓ Transaction succeeded");
+                if verbose {
+                    println!(" ✓ Transaction succeeded");
+                }
                 TxResult::Success(undo_tx)
             }
             Err(tx_err) => {

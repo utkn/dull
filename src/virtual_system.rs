@@ -95,7 +95,7 @@ impl<T> VirtualSystem<T> {
         let abs_target = utils::expand_path(&target)?;
         let abs_source = utils::expand_path(leaf)?;
         // Get the original source, pointing to the regular file in the module directory.
-        let abs_source_canon = abs_source.canonicalize().context(format!(
+        let abs_source_canon = abs_source.read_link().context(format!(
             "could not canonicalize the source {:?}",
             abs_source
         ))?;

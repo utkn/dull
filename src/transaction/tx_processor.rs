@@ -25,7 +25,7 @@ impl TxProcessor {
             tx_result.display_report();
         }
         if tx_result.is_fatal_failure() {
-            panic!("Fatal failure! Filesystem could not be restored.");
+            panic!("Fatal failure: Filesystem could not be restored.");
         }
         let undo_tx = tx_result.as_tx_result()?;
         self.processed.push(undo_tx);
@@ -38,7 +38,6 @@ impl TxProcessor {
         if let Err(err) = run_res {
             println!("Rolling {} back due to error", self.name);
             self.rollback()?;
-            println!("Rolled back {}", self.name);
             Err(err)
         } else {
             Ok(())

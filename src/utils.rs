@@ -33,16 +33,14 @@ pub fn expand_path(path: &PathBuf) -> anyhow::Result<PathBuf> {
     absolute_path
 }
 
-pub fn get_state<P: Into<PathBuf>>(p: P) -> anyhow::Result<String> {
-    let root_path = p.into();
-    let state_file = root_path.join(globals::STATE_FILE_NAME);
+pub fn get_state() -> anyhow::Result<String> {
+    let state_file = PathBuf::from(".").join(globals::STATE_FILE_NAME);
     std::fs::read_to_string(&state_file)
         .context(format!("could not get the state file {:?}", state_file))
 }
 
-pub fn set_state<P: Into<PathBuf>>(p: P, contents: &str) -> anyhow::Result<()> {
-    let root_path = p.into();
-    let state_file = root_path.join(globals::STATE_FILE_NAME);
+pub fn set_state(contents: &str) -> anyhow::Result<()> {
+    let state_file = PathBuf::from(".").join(globals::STATE_FILE_NAME);
     std::fs::write(&state_file, contents)
         .context(format!("could not set the state file {:?}", state_file))
 }

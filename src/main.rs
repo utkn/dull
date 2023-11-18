@@ -81,7 +81,7 @@ fn main() -> anyhow::Result<()> {
             let build_path = VirtualSystemBuilder::from_config(&config)
                 .build(name, cli.verbose)
                 .context("build failed")?;
-            utils::set_state(".", &build_path.clone().into_os_string().to_string_lossy())?;
+            utils::set_state(&build_path.clone().into_os_string().to_string_lossy())?;
             println!("Build complete at path {:?}", build_path)
         }
         CliCommand::Deploy {
@@ -93,7 +93,7 @@ fn main() -> anyhow::Result<()> {
             let effective_build_path = if let Some(given_path) = build_path {
                 given_path
             } else {
-                utils::get_state(".")
+                utils::get_state()
                     .context(format!(
                         "no state was found, explicitly supply the target using --build"
                     ))?
@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
         CliCommand::Undeploy => {
             println!("Undeploying...");
             let mut tx_proc = TxProcessor::new("undeployment", cli.verbose);
-            let last_build_path = utils::get_state(".")
+            let last_build_path = utils::get_state()
                 .context("no build was deployed, cannot undeploy")?
                 .into();
             let virt_system = VirtualSystem::read(last_build_path)?;
@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
                 .context("undeployment failed")?;
         }
         CliCommand::Info => {
-            let latest_build = utils::get_state(".")
+            let latest_build = utils::get_state()
                 .and_then(|s| VirtualSystem::read(s.into()))
                 .map(|vs| vs.path.to_string_lossy().to_string())
                 .unwrap_or(String::from("N/A"));
@@ -147,6 +147,7 @@ fn main() -> anyhow::Result<()> {
             std::fs::remove_dir_all("builds")?;
         }
         CliCommand::RunTransaction { file } => {
+            println!("Running the transaction at {:?}...", file);
             Transaction::read(file)
                 .context("could not read the transaction")?
                 .run_atomic(cli.verbose)
