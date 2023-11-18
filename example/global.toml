@@ -1,0 +1,12 @@
+[[module]]
+source = "modules/alacritty"
+target = "example-home/.config/alacritty"
+
+[[module]]
+source = "modules/helix"
+target = "example-home/.config/helix"
+
+[[module]]
+source = "modules/fish"
+target = "example-home/.config/fish"
+

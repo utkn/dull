@@ -1,0 +1,45 @@
+@define-color main rgba(29, 31, 33, 1.0);
+@define-color secondary #3B4252;
+@define-color highlight rgba(197, 200, 198, 1.0);
+
+* {
+	font-family: "FontAwesome", monospace;
+}
+
+window {
+	background-color: @main;
+	border: 1px solid @secondary;
+}
+
+#input {
+	margin: 5px;
+	border-radius: 0px;
+	border: none;
+	background-color: @secondary;
+	color: white;
+}
+
+#outer-box {
+	margin: 2px;
+}
+
+#scroll {
+	margin: 5px;
+}
+
+#text {
+	color: white;
+}
+
+#entry {
+	border-bottom: 1px solid;
+	border-color: @secondary; 
+}
+
+#entry:selected {
+	background-color: @highlight;
+}
+
+#entry:selected #text {
+	color: black;
+}

@@ -26,15 +26,15 @@ impl TxBuilder {
         self.dirs_to_create.contains_key(p)
     }
 
-    pub fn will_create_file(&self, p: &PathBuf) -> bool {
+    pub fn _will_create_file(&self, p: &PathBuf) -> bool {
         self.files_to_create.contains_key(p)
     }
 
-    pub fn will_remove_file(&self, p: &PathBuf) -> bool {
+    pub fn _will_remove_file(&self, p: &PathBuf) -> bool {
         self.files_to_remove.contains_key(p)
     }
 
-    pub fn will_remove_dir(&self, p: &PathBuf) -> bool {
+    pub fn _will_remove_dir(&self, p: &PathBuf) -> bool {
         self.dirs_to_remove.contains_key(p)
     }
 

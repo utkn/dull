@@ -126,7 +126,7 @@ impl<T> VirtualSystem<T> {
                     .context("leaf path is malformed")?,
             );
             let abs_target = utils::expand_path(&target)?;
-            txb.remove_any(&abs_target, &fs);
+            txb.remove_any(&abs_target, &fs)?;
         }
         txb.build("Undeploy")
             .and_then(|tx| tx_proc.run_required(tx))
@@ -141,7 +141,7 @@ impl VirtualSystem<Undeployable> {
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (_, abs_target) = self.parse_leaf(&leaf)?;
-            txb.remove_any(&abs_target, &fs);
+            txb.remove_any(&abs_target, &fs)?;
         }
         txb.build("ClearTargets")
             .and_then(|tx| tx_proc.run_required(tx))?;
@@ -177,7 +177,6 @@ impl VirtualSystem<Undeployable> {
 impl VirtualSystem<Deployable> {
     pub fn soft_deploy(self, tx_proc: &mut TxProcessor) -> anyhow::Result<()> {
         let mut txb = TxBuilder::empty();
-        let fs = ActualFilesystem;
         let leaves = self.get_leaves();
         for leaf in leaves {
             let (source, target) = self
@@ -229,7 +228,7 @@ impl VirtualSystem<Deployable> {
                 let inner_target_parent = inner_target
                     .parent()
                     .context(format!("could not get the parent of {:?}", inner_target))?;
-                txb.ensure_dirs(inner_target_parent, &fs);
+                txb.ensure_dirs(inner_target_parent, &fs)?;
                 // Copy the file in.
                 txb.copy_file(inner_source, inner_target);
             }

@@ -1,7 +1,5 @@
 /target
-/modules
 /builds
 /transactions
 .dull-build
 .dull-state
-*.toml

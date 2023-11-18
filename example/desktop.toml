@@ -1,0 +1,9 @@
+# dull build desktop.toml
+
+[[include]]
+path = "global.toml"
+
+[[module]]
+source = "modules/kde"
+target = "example-home"
+

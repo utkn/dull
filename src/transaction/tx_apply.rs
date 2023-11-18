@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use anyhow::Context;
-
 use crate::transaction::TxBuilder;
 
 use super::{FsPrimitive, Transaction, TxResult};

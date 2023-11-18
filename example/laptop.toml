@@ -1,0 +1,9 @@
+# dull build laptop.toml
+
+[[include]]
+path = "global.toml"
+
+[[module]]
+source = "modules/wofi"
+target = "example-home/.config/wofi"
+
