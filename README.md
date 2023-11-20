@@ -7,6 +7,11 @@ Clone this repository, `cd` into it and invoke `cargo` to build and install it f
 $ cargo install --path .
 ```
 
+Alternatively, fetch it from the cargo repositories:
+```bash
+$ cargo install dull-dotfile-manager
+```
+
 ## Quick Start
 Create a new folder. The goal is to set up `dull` such that all your dotfiles can be managed from here. 
 Create a configuration file `config.toml` at the root. The configuration file should contain `module`s that map a `source` path to a `target` path. In this example, we will assume that we want to manage three configurations (i.e., `alacritty`, `helix`, and `fish`) and have the following folder structure:
